@@ -4825,6 +4825,7 @@ def get_available_models() -> dict:
 
 # ── Static file path ─────────────────────────────────────────────────────────
 _INDEX_HTML_PATH = REPO_ROOT / "static" / "index.html"
+_CHATBOT_HTML_PATH = REPO_ROOT / "static" / "chatbot.html"
 
 # ── Thread synchronisation ───────────────────────────────────────────────────
 LOCK = threading.Lock()

@@ -237,7 +237,7 @@ If an AI assistant is helping with install, reinstall, bootstrap, provider setup
 - After registering at least one passkey, Settings -> System can remove the password and keep passkey-only sign-in enabled. Password auth remains the bootstrap/recovery path until you choose to go passwordless; passkeys are same-origin and stored locally in the WebUI state directory
 - Signed HMAC HTTP-only cookie with 24h TTL
 - Minimal dark-themed login page at `/login`
-- Security headers on all responses (X-Content-Type-Options, X-Frame-Options, Referrer-Policy)
+- Security headers on all responses (X-Content-Type-Options, X-Frame-Options, Referrer-Policy, CSP `frame-ancestors`)
 - 20MB POST body size limit
 - CDN resources pinned with SRI integrity hashes
 
@@ -345,6 +345,17 @@ Full list of environment variables:
 ### Remote access (SSH tunnel, Tailscale, phone)
 
 The server binds to `127.0.0.1` by default. To reach it from another machine use an SSH tunnel (`ssh -N -L 8787:127.0.0.1:8787 user@host`, which `start.sh` prints for you over SSH), or join your server and phone to a [Tailscale](https://tailscale.com) network and browse to `http://<server-tailscale-ip>:8787` with `HERMES_WEBUI_HOST=0.0.0.0` + `HERMES_WEBUI_PASSWORD` set. Full walkthrough (incl. a community ARM64-Android field report): [`docs/remote-access.md`](docs/remote-access.md).
+
+### Local iframe embedding
+
+Hermes WebUI can be embedded by the local development host app at
+`http://localhost:5174`, including URLs such as
+`http://localhost:5174/?record_id=<id>`. Modern browsers use the enforced
+`Content-Security-Policy: frame-ancestors 'self' http://localhost:5174`
+directive; legacy browsers receive `X-Frame-Options: ALLOW-FROM
+http://localhost:5174` as a fallback. The changing `record_id` value is not part
+of the frame policy because browsers evaluate the parent page origin, not its
+query string.
 
 ### Manual launch (without start.sh)
 
@@ -558,6 +569,10 @@ The WebUI is still coupled to Hermes Agent internals for runtime execution, prov
 **Start here**
 - [`docs/why-hermes.md`](docs/why-hermes.md) — why Hermes, the mental model, and a detailed comparison to Claude Code / Codex / OpenCode / Cursor
 - [`docs/onboarding.md`](docs/onboarding.md) — first-run wizard, provider setup, local model server Base URLs, and safe re-runs
+- [`docs/onboarding-and-secondary-development.zh-CN.md`](docs/onboarding-and-secondary-development.zh-CN.md) — Simplified Chinese beginner guide for setup and small WebUI customizations
+- [`docs/api-webui-map.zh-CN.md`](docs/api-webui-map.zh-CN.md) — Simplified Chinese map of `api/routes.py` business APIs to WebUI pages and panels
+- [`docs/sessions-js-reading-guide.zh-CN.md`](docs/sessions-js-reading-guide.zh-CN.md) — Simplified Chinese guided reading of `static/sessions.js` for frontend learning
+- [`docs/messages-js-reading-guide.zh-CN.md`](docs/messages-js-reading-guide.zh-CN.md) — Simplified Chinese guided reading of `static/messages.js` for frontend learning
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — diagnostic flows for common failures (e.g. "AIAgent not available")
 
 **Using & customizing**

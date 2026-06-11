@@ -20,6 +20,10 @@ _CLIENT_DISCONNECT_ERRORS = (
     ssl.SSLError,
 )
 
+EMBED_ALLOWED_ORIGIN = 'http://localhost:5173'
+FRAME_ANCESTORS_VALUE = f"'self' {EMBED_ALLOWED_ORIGIN}"
+LEGACY_X_FRAME_OPTIONS_VALUE = f"ALLOW-FROM {EMBED_ALLOWED_ORIGIN}"
+
 
 def require(body: dict, *fields) -> None:
     """Phase D: Validate required fields. Raises ValueError with clean message."""
@@ -52,7 +56,7 @@ def safe_resolve(root: Path, requested: str) -> Path:
 def _security_headers(handler):
     """Add security headers to every response."""
     handler.send_header('X-Content-Type-Options', 'nosniff')
-    handler.send_header('X-Frame-Options', 'DENY')
+    handler.send_header('X-Frame-Options', LEGACY_X_FRAME_OPTIONS_VALUE)
     handler.send_header('Referrer-Policy', 'same-origin')
     handler.send_header(
         'Content-Security-Policy',
@@ -61,6 +65,7 @@ def _security_headers(handler):
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
         "img-src 'self' data: https: blob:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://cdn.jsdelivr.net; "
         "manifest-src 'self' https://*.cloudflareaccess.com; "
+        f"frame-ancestors {FRAME_ANCESTORS_VALUE}; "
         "base-uri 'self'; form-action 'self'"
     )
     handler.send_header(

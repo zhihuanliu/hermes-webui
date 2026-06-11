@@ -168,12 +168,14 @@ def _csp_extra_connect_src() -> str:
 
 
 def _build_csp_report_only_policy() -> str:
+    from api.helpers import FRAME_ANCESTORS_VALUE
+
     connect_src = _CSP_CONNECT_BASE + _csp_extra_connect_src()
     return (
         "default-src 'self'; "
         "base-uri 'self'; "
         "object-src 'none'; "
-        "frame-ancestors 'self'; "
+        f"frame-ancestors {FRAME_ANCESTORS_VALUE}; "
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
         "img-src 'self' data: blob:; "

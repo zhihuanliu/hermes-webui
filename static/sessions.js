@@ -751,7 +751,7 @@ async function loadSession(sid){
     }
     _loadingOlder = false;
     const _msgInner = $('msgInner');
-    if (_msgInner && currentSid !== sid) _msgInner.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">Loading conversation...</div>';
+    if (_msgInner && currentSid !== sid) _msgInner.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:14px;padding:40px;"><svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="animation:_spin .8s linear infinite;flex-shrink:0"><style>@keyframes _spin{to{transform:rotate(360deg)}}</style><circle cx="16" cy="16" r="12" stroke="var(--border)" stroke-width="3"/><path d="M16 4a12 12 0 0 1 12 12" stroke="var(--accent,#7aa2ff)" stroke-width="3" stroke-linecap="round"/></svg><span style="color:var(--text-muted);font-size:13px;">正在加载…</span></div>';
   }
   // Phase 1: Load metadata only (~1KB) for fast session switching. Keep model
   // resolution out of the first-paint path; old provider-shaped model IDs are
@@ -764,7 +764,7 @@ async function loadSession(sid){
     const _msgInner = $('msgInner');
     if(_msgInner){
       if(e.status===404){
-        _msgInner.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">Session not available in web UI.</div>';
+        _msgInner.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">此会话在 Web UI 中不可用。</div>';
         // Self-heal (clear saved id + strip /session/<id> URL) only when the
         // 404'd id is the one we are activating: a boot-time restore
         // (!currentSid, #2798) or a mid-session reload of the *current* session
@@ -785,7 +785,7 @@ async function loadSession(sid){
           }
         }
       } else {
-        _msgInner.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">Failed to load session. Try switching sessions or refreshing.</div>';
+        _msgInner.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">会话加载失败，请尝试切换会话或刷新页面。</div>';
         if(typeof showToast==='function') showToast('Failed to load session',3000,'error');
       }
     }
@@ -920,7 +920,7 @@ async function loadSession(sid){
       // persist forever with no recovery path.
       const _msgInner = $('msgInner');
       if (_msgInner) {
-        _msgInner.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">Failed to load messages. Try switching sessions or refreshing.</div>';
+        _msgInner.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:14px;padding:40px;text-align:center;">消息加载失败，请尝试切换会话或刷新页面。</div>';
       }
       if (typeof showToast === 'function') showToast('Failed to load conversation messages', 3000, 'error');
       if (_loadingSessionId === sid) _loadingSessionId = null;

@@ -88,7 +88,7 @@ def test_security_headers_on_json():
     d, status, headers = get("/api/auth/status")
     assert status == 200
     assert headers.get("X-Content-Type-Options") == "nosniff"
-    assert headers.get("X-Frame-Options") == "DENY"
+    assert headers.get("X-Frame-Options") == "ALLOW-FROM http://localhost:5174"
     assert headers.get("Referrer-Policy") == "same-origin"
 
 

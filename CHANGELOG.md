@@ -3,6 +3,16 @@
 
 ## [Unreleased]
 
+### Changed
+- Allowed Hermes WebUI to be embedded by the local development host app at `http://localhost:5174` using enforced CSP `frame-ancestors 'self' http://localhost:5174`, with `X-Frame-Options: ALLOW-FROM http://localhost:5174` as the legacy-browser fallback.
+
+### Docs
+- Added a Simplified Chinese onboarding and secondary-development guide for junior Web engineers, covering the project shape, Windows 11/PowerShell and WSL2 setup paths, code map, starter customization examples, debugging, and contribution flow.
+- Added a Simplified Chinese API-to-WebUI map that summarizes `api/routes.py` business endpoints, their related browser pages/panels, streaming interfaces, and secondary-development touchpoints.
+- Added a Simplified Chinese guided reading document for `static/sessions.js`, covering its session-management role, module breakdown, key line-by-line walkthroughs, JS learning points, and refactoring opportunities.
+- Added a Simplified Chinese guided reading document for `static/messages.js`, covering its chat runtime role, send/stream lifecycle, SSE event handling, recovery paths, performance techniques, and JS practice prompts.
+- Added a LeanSpec record for the iframe embedding security-header contract.
+
 ## [v0.51.262] — 2026-06-04 — Release ID (stage-r12 — zh localization + Docker reveal-path + recall-prefill role fix)
 
 ### Fixed

@@ -1047,6 +1047,7 @@ from api.config import (
     SERVER_START_TIME,
     _resolve_cli_toolsets,
     _INDEX_HTML_PATH,
+    _CHATBOT_HTML_PATH,
     get_available_models,
     IMAGE_EXTS,
     MD_EXTS,
@@ -4701,6 +4702,37 @@ def handle_get(handler, parsed) -> bool:
 
             html = (
                 _INDEX_HTML_PATH.read_text(encoding="utf-8")
+                .replace("__WEBUI_VERSION__", version_token)
+                .replace("__MAX_UPLOAD_BYTES__", str(MAX_UPLOAD_BYTES))
+                .replace("__CSRF_TOKEN_JSON__", json.dumps(csrf_token))
+            )
+            return t(
+                handler,
+                inject_extension_tags(html),
+                content_type="text/html; charset=utf-8",
+            )
+        except Exception as exc:
+            return _serve_shell_unavailable(handler, exc)
+
+    if parsed.path in ("/chatbot", "/chatbot.html"):
+        try:
+            from urllib.parse import quote
+            from api.updates import WEBUI_VERSION
+            from api.extensions import inject_extension_tags
+            version_token = quote(WEBUI_VERSION, safe="")
+
+            csrf_token = ""
+            try:
+                from api.auth import csrf_token_for_session, is_auth_enabled, parse_cookie, verify_session
+                if is_auth_enabled():
+                    cookie_val = parse_cookie(handler)
+                    if cookie_val and verify_session(cookie_val):
+                        csrf_token = csrf_token_for_session(cookie_val) or ""
+            except Exception:
+                csrf_token = ""
+
+            html = (
+                _CHATBOT_HTML_PATH.read_text(encoding="utf-8")
                 .replace("__WEBUI_VERSION__", version_token)
                 .replace("__MAX_UPLOAD_BYTES__", str(MAX_UPLOAD_BYTES))
                 .replace("__CSRF_TOKEN_JSON__", json.dumps(csrf_token))

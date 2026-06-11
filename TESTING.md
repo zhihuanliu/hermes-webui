@@ -1848,7 +1848,7 @@ Each has automated API-level tests in `tests/test_sprint{N}.py`.
 - Settings panel: set password via "Access Password" field. Auth activates.
 - "Sign Out" button visible when auth active. Click → redirected to /login.
 - API calls without auth cookie → 401 JSON response.
-- Check response headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`.
+- Check response headers: `X-Content-Type-Options: nosniff`, `Content-Security-Policy` includes `frame-ancestors 'self' http://localhost:5174`, and `X-Frame-Options: ALLOW-FROM http://localhost:5174`.
 
 ### Sprint 20: Voice Input + Send Button
 - Mic button visible in composer (Chrome/Edge). Hidden in Firefox.
