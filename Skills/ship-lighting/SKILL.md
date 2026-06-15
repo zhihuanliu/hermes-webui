@@ -1,8 +1,6 @@
 ---
 name: ship-lighting
-description: "船舶电气图纸智能体"
-version: 1.0
-author: Hermes Agent
+description: "通过 Hermes 服务端绑定的 EID 用户与记录上下文，查询和修改船舶电气、照明图纸数据。用于甲板、舱室、配电、负载、灯具、布局和照度验算等 EID 业务操作。"
 license: MIT
 metadata:
   hermes:
@@ -15,29 +13,31 @@ metadata:
 
 **规则1：先加载 skill，再执行。** 必须先 `skill_view(name='ship-lighting')` 再看用户意图。
 
-**规则2：每次 terminal 调用必须输出四项证据：** 脚本绝对路径、完整命令、退出码、关键输出前10行。
+**规则2：仅在显式开发诊断中直接运行脚本。** 此时输出四项证据：脚本绝对路径、完整命令、退出码、关键输出前10行；不得输出 EID 身份头、环境变量值或委托令牌。
 
-**规则3：永远通过 tool_dispatcher.py + param_validator 调用 API。**
-- 调度器负责校验参数 + 调用 api_client
-- 校验失败时返回结构化错误（含缺失参数 + 可用选项）
-- **禁止**直接调用 api_client 函数或直接 curl 调用 HTTP API
+**规则3：生产环境只通过 Hermes 服务端注册的 EID 专用工具调用 API。**
+- EID 专用工具负责绑定可信用户、当前会话 record 和短期委托令牌。
+- `tool_dispatcher.py` + `param_validator.py` 是服务端工具内部适配器和本地开发入口，不是独立授权边界。
+- 若当前运行后端没有 EID 专用工具或无法传递完整可信上下文，明确拒绝业务操作；禁止回退到通用 terminal、直接调用 `api_client` 或 `curl`。
 
-**规则4：record_id 由环境变量控制。**
-- 默认值: `ed18461b23884c569e2366c228378825`
-- 不同 profile 可在 `.env` 中设置 `SHIP_LIGHTING_RECORD_ID` 来使用不同的 record_id
-- 例如 `~/.hermes/profiles/user_zhang/.env` 中写入 `SHIP_LIGHTING_RECORD_ID=xxx`
-- 实现用户数据隔离：每个 profile 查自己的 record_id，互不可见
+**规则4：EID 业务上下文由 Hermes 服务端提供。**
+- 不读取、猜测、缓存或要求用户提供 `record_id`、`user_id`。
+- 不允许模型在 `--params` 中传入或覆盖 `record_id`、`user_id`。
+- `tool_dispatcher.py` 只使用当前运行上下文中的 `HERMES_EID_SUBJECT` 和 `HERMES_EID_RECORD_ID`。
+- 无可信用户上下文时停止调用并提示重新登录；无 record 上下文时停止调用并提示先打开或选择记录。
+- EID 后端对每次业务数据访问执行最终授权校验；Hermes profile 只是 Agent 配置，不是用户身份。
+- `SHIP_LIGHTING_RECORD_ID` 和任何固定默认 record 均不得用于生产业务调用。
 
 **规则5：查询操作必须展示所有返回内容。** 用户明确要求：查询 API 返回的全部字段和内容都要展示给用户，不能截断或仅展示部分摘要。用结构化表格展示数据，有链接的也需要展示出来。
 
 **规则6：参数不全时，向用户展示结构化表格。** 格式如下：
 
-**规则8：写操作必须通过 clarify + 管道传 y 双层确认。** 写操作前先展示确认表格，然后调用 `clarify(choices=["✅ Allow (确认执行)", "❌ Reject (取消操作)"])`。用户选 Allow 后，用 `echo "y" | python3 scripts/tool_dispatcher.py ... --confirm` 执行。禁止使用 `terminal(background=true)` + `process(action='submit')` 方式（进程来不及接收 stdin）。
+**规则8：写操作必须先获得用户确认。** 写操作前展示确认表格并调用 `clarify`。生产环境确认后调用 EID 专用写工具；仅在显式开发诊断中，才使用 `echo "y" | python3 scripts/tool_dispatcher.py ... --confirm` 的 CLI 双层确认。
 
 **规则7：所有业务函数参数必须为必填位置参数，禁止 `**kwargs` 和 `= None` 默认值。**
 - 每个 API 字段都必须有对应的显式位置参数
 - docstring 中所有参数标注**必填**（不写"可选"）
-- 调用时传入 `DEFAULT_RECORD_ID` 而非省略
+- `record_id` 仅作为脚本内部必填参数，由调度器从服务端上下文注入
 - 这一规则来自用户明确要求：把所有可选参数改为必填，消除隐藏默认值
 
 ```
@@ -59,18 +59,18 @@ metadata:
 
 ## 架构
 
-### Skill 而非 Plugin
+### EID 服务端工具边界
 
-本功能以 Hermes **Skill** 而非 Plugin 的形式维护。原因：
+本目录保留 Skill 的领域说明、参数规则和脚本实现，但生产执行边界必须是 Hermes
+服务端注册的 EID 专用工具。公开工具参数不包含 `user_id`、`record_id` 或委托令牌；
+服务端执行器在调用本目录脚本时注入 `TrustedEidContext`。
 
-| 维度 | Skill | Plugin | 本项目的选择理由 |
-|:----|:------|:-------|:----------------|
-| 交互方式 | LLM 引导文档 + terminal 命令 | 工具注册 + 钩子 + slash 命令 | 所有操作通过 terminal() → tool_dispatcher.py 完成，不需要注册为 Hermes 工具 |
-| 加载方式 | skill_view() 按需加载 | 自动发现 + config.yaml 启用 | 按需加载更适合低频使用场景，不增加每次 session 的启动开销 |
-| 生命周期 | LLM 决定何时加载 | 全程活跃（hooks） | 不需要生命周期钩子（on_session_start 等） |
-| 脚本调用 | python3 scripts/tool_xxx.py | 注册为工具后自动发现 | terminal 调用模式成熟且稳定 |
+`tool_dispatcher.py` 可用于两种场景：
+- EID 专用工具的内部适配层。
+- 显式开启 EID development mode 的本地诊断。
 
-**结论：** 此功能的所有交互通过 terminal() → tool_dispatcher.py 完成，不涉及 Hermes 工具注册、生命周期钩子或 slash 命令。Skill 直接提供 LLM 指导文档 + 命令行脚本，结构更简洁，与用户的工作流一致。如需将来启用 hooks 或工具注册，迁移到 Plugin 的成本很低（已有一次实操经验）。
+它不得被当作通用 terminal 的生产授权边界。若服务端 binder 尚未部署，保持
+fail-closed 并提示当前后端不支持 EID 业务工具。
 
 ```
 用户自然语言
@@ -79,11 +79,17 @@ metadata:
 LLM（你）负责：
   ├── 意图识别     → 匹配 api_tool（57 个工具）
   ├── 参数提取     → 从用户语句中提取结构化参数
-  └── 调度执行     → 调用 tool_dispatcher.py
+  └── 调度执行     → 调用 Hermes EID 专用工具
+          │
+          ▼
+EidToolContextBinder 负责：
+  ├── 绑定当前已鉴权用户和会话 record_id
+  ├── 传递短期委托令牌
+  └── 调用 tool_dispatcher.py
           │
           ▼
 tool_dispatcher.py 负责：
-  ├── 自动注入 default record_id
+  ├── 注入服务端授权的当前会话 record_id
   ├── param_validator 参数校验
   │     ├── 检查必填参数
   │     ├── 检查枚举值合法性
@@ -120,94 +126,94 @@ tool_dispatcher.py 负责：
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
 | `primary_parse` | 一次解析：上传图纸提取图层 | file_path, import_mode, pid |
-| `submit_preview` | 提交图层映射触发预览 | record_id, layer_mappings | - |
-| `secondary_parse` | 二次解析：切分图纸提取甲板 | record_id, layer_mappings | - |
-| `recognition` | 完成导入：识别舱室/负载 | record_id, decks | - |
+| `submit_preview` | 提交图层映射触发预览 | layer_mappings |
+| `secondary_parse` | 二次解析：切分图纸提取甲板 | layer_mappings |
+| `recognition` | 完成导入：识别舱室/负载 | decks |
 
 ### 编辑模式（2 项）
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
-| `edit_mode_start` | 开始编辑模式 | record_id, mode_type |
-| `edit_mode_exit` | 结束编辑模式 | record_id, mode_type, is_save |
+| `edit_mode_start` | 开始编辑模式 | mode_type |
+| `edit_mode_exit` | 结束编辑模式 | mode_type, is_save |
 
 ### 甲板（3 项）
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
-| `get_decks` | 查询甲板列表 | record_id |
-| `search_deck` | 关键字搜索甲板元件 | record_id, system_type, keyword, deck_id |
-| `update_deck` | 编辑甲板信息 | record_id, deck_id, deck_height, deck_name |
+| `get_decks` | 查询甲板列表 | 无 |
+| `search_deck` | 关键字搜索甲板元件 | system_type, keyword, deck_id |
+| `update_deck` | 编辑甲板信息 | deck_id, deck_height, deck_name |
 
 ### 舱室（5 项）
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
-| `get_compartments` | 查询舱室列表 | record_id, deck_id |
-| `get_compartment_detail` | 查询舱室详情 | record_id, deck_id, compartment_id |
-| `create_compartment` | 新增舱室 | record_id, deck_id, points |
-| `update_compartment` | 编辑舱室 | record_id, deck_id, compartment_id, compartment_name, compartment_function, points |
-| `delete_compartment` | 删除舱室 | record_id, deck_id, compartment_id |
+| `get_compartments` | 查询舱室列表 | deck_id |
+| `get_compartment_detail` | 查询舱室详情 | deck_id, compartment_id |
+| `create_compartment` | 新增舱室 | deck_id, points |
+| `update_compartment` | 编辑舱室 | deck_id, compartment_id, compartment_name, compartment_function, points |
+| `delete_compartment` | 删除舱室 | deck_id, compartment_id |
 
 ### 主配电板（3 项）
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
-| `get_main_switchboards` | 查询主配电板列表 | record_id, deck_id, compartment_id |
-| `get_main_switchboard_detail` | 查询主配电板详情 | record_id, msb_id |
-| `get_main_switchboard_connected` | 查询主配电板关联元件 | record_id, msb_id |
+| `get_main_switchboards` | 查询主配电板列表 | deck_id, compartment_id |
+| `get_main_switchboard_detail` | 查询主配电板详情 | msb_id |
+| `get_main_switchboard_connected` | 查询主配电板关联元件 | msb_id |
 
 ### 分配电箱（3 项）
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
-| `get_distribution_boards` | 查询分配电箱列表 | record_id, deck_id, compartment_id |
-| `get_distribution_board_detail` | 查询分配电箱详情 | record_id, db_id |
-| `get_distribution_board_connected` | 查询分配电箱关联元件 | record_id, db_id |
+| `get_distribution_boards` | 查询分配电箱列表 | deck_id, compartment_id |
+| `get_distribution_board_detail` | 查询分配电箱详情 | db_id |
+| `get_distribution_board_connected` | 查询分配电箱关联元件 | db_id |
 
 ### 负载（4 项）
 | 工具 | 功能 | 必填参数 | 可选参数 |
 |------|------|----------|----------|
-| `get_loads` | 查询负载列表 | record_id, deck_id | compartment_id |
-| `get_load_detail` | 查询负载详情 | record_id, load_id | - |
-| `get_loads_with_detail` | 组合查询：列表+逐条详情 | record_id, deck_id | compartment_id |
-| `update_load` | 编辑负载 | record_id, load_id | load_name, type, compartment_id, supply_equipment_id |
+| `get_loads` | 查询负载列表 | deck_id | compartment_id |
+| `get_load_detail` | 查询负载详情 | load_id | - |
+| `get_loads_with_detail` | 组合查询：列表+逐条详情 | deck_id | compartment_id |
+| `update_load` | 编辑负载 | load_id | load_name, type, compartment_id, supply_equipment_id |
 
 ### 灯具（9 项）
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
-| `get_light_types` | 查询灯具类型列表 | record_id |
-| `get_lights` | 查询灯具列表 | record_id, deck_id, compartment_id |
-| `get_light_detail` | 查询灯具详情 | record_id, light_id |
-| `update_light` | 编辑灯具 | record_id, light_id, light_name, compartment_id, light_type_id, points |
-| `delete_lights` | 批量删除灯具 | record_id, light_ids |
-| `recommend_light_count` | 灯具数量推荐 | record_id, compartment_id, light_type_id, illuminance, utilization, maintenance |
-| `layout_lights` | 灯具布局 | record_id, compartment_id, light_type_count, layout_type |
-| `verify_illuminance` | 灯具验算照度 | record_id, compartment_id, light_type_count, illuminance, utilization, maintenance |
-| `update_lights_layout` | 灯具坐标更新 | record_id, compartment_id, lights_points |
+| `get_light_types` | 查询灯具类型列表 | 无 |
+| `get_lights` | 查询灯具列表 | deck_id, compartment_id |
+| `get_light_detail` | 查询灯具详情 | light_id |
+| `update_light` | 编辑灯具 | light_id, light_name, compartment_id, light_type_id, points |
+| `delete_lights` | 批量删除灯具 | light_ids |
+| `recommend_light_count` | 灯具数量推荐 | compartment_id, light_type_id, illuminance, utilization, maintenance |
+| `layout_lights` | 灯具布局 | compartment_id, light_type_count, layout_type |
+| `verify_illuminance` | 灯具验算照度 | compartment_id, light_type_count, illuminance, utilization, maintenance |
+| `update_lights_layout` | 灯具坐标更新 | compartment_id, lights_points |
 
 > **`layout_type` 枚举：** `one_click`（一键部署）| `uniform`（均匀布局）| `lane_beam`（绕梁布灯）
 
 ### 梁线（5 项）、车道线（5 项）、接线盒（2 项）
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
-| `get_beam_lines` | 查询梁线列表 | record_id, deck_id |
-| `get_beam_line_detail` | 查询梁线详情 | record_id, beam_line_id |
-| `create_beam_line` | 新增梁线 | record_id, deck_id, points |
-| `update_beam_line` | 编辑梁线 | record_id, beam_line_id |
-| `delete_beam_line` | 删除梁线 | record_id, beam_line_id |
-| `get_lane_lines` | 查询车道线列表 | record_id, deck_id |
-| `get_lane_line_detail` | 查询车道线详情 | record_id, lane_line_id |
-| `create_lane_line` | 新增车道线 | record_id, deck_id, points |
-| `update_lane_line` | 编辑车道线 | record_id, lane_line_id |
-| `delete_lane_line` | 删除车道线 | record_id, lane_line_id |
-| `get_junction_boxes` | 查询接线盒列表 | record_id, deck_id |
-| `create_junction_box` | 新建接线盒 | record_id, deck_id, db_id |
+| `get_beam_lines` | 查询梁线列表 | deck_id |
+| `get_beam_line_detail` | 查询梁线详情 | beam_line_id |
+| `create_beam_line` | 新增梁线 | deck_id, points |
+| `update_beam_line` | 编辑梁线 | beam_line_id |
+| `delete_beam_line` | 删除梁线 | beam_line_id |
+| `get_lane_lines` | 查询车道线列表 | deck_id |
+| `get_lane_line_detail` | 查询车道线详情 | lane_line_id |
+| `create_lane_line` | 新增车道线 | deck_id, points |
+| `update_lane_line` | 编辑车道线 | lane_line_id |
+| `delete_lane_line` | 删除车道线 | lane_line_id |
+| `get_junction_boxes` | 查询接线盒列表 | deck_id |
+| `create_junction_box` | 新建接线盒 | deck_id, db_id |
 
 ### 绑定（6 项）
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
-| `get_unbound_compartment` | 查询未绑定舱室的负载 | record_id, system_type |
-| `get_unbound_power` | 查询未绑定配电的负载 | record_id, deck_id, system_type, compartment_id |
-| `bind_compartment` | 绑定负载到舱室 | record_id, deck_id, compartment_id, unbound_loads |
-| `unbind_compartment` | 从舱室解绑负载 | record_id, unbound_loads |
-| `bind_power` | 绑定负载到供电设备 | record_id, supply_equipment_id, unbound_loads |
-| `unbind_power` | 从供电设备解绑负载 | record_id, unbound_loads |
+| `get_unbound_compartment` | 查询未绑定舱室的负载 | system_type |
+| `get_unbound_power` | 查询未绑定配电的负载 | deck_id, system_type, compartment_id |
+| `bind_compartment` | 绑定负载到舱室 | deck_id, compartment_id, unbound_loads |
+| `unbind_compartment` | 从舱室解绑负载 | unbound_loads |
+| `bind_power` | 绑定负载到供电设备 | supply_equipment_id, unbound_loads |
+| `unbind_power` | 从供电设备解绑负载 | unbound_loads |
 
 > **`system_type` 枚举：** `primary`（一次系统）| `secondary`（二次系统）| `lighting`（照明系统）
 
@@ -225,20 +231,23 @@ tool_dispatcher.py 负责：
 | 工具 | 功能 | 必填参数 |
 |------|------|----------|
 | `get_records` | 查询导入记录 | 无 |
-| `get_record_snapshot` | 查询记录回溯 | record_id |
-| `get_canvas_all` | 获取画布完整数据 | record_id |
-| `measure_point` | 点距测量 | record_id, deck_id, start_point, end_point |
-| `measure_compartment` | 舱室距离测量 | record_id, start_deck_id, start_compartment_id, end_deck_id, end_compartment_id |
+| `get_record_snapshot` | 查询记录回溯 | 无 |
+| `get_canvas_all` | 获取画布完整数据 | 无 |
+| `measure_point` | 点距测量 | deck_id, start_point, end_point |
+| `measure_compartment` | 舱室距离测量 | start_deck_id, start_compartment_id, end_deck_id, end_compartment_id |
 | `get_all_compartments` | 获取所有甲板全部舱室 | 无 |
 | `get_compartment_info` | 按名称查找舱室 | compartment_name |
 | `get_system_status` | 获取系统状态 | 无 |
 
 ---
 
-## 调用方式
+## 本地开发调用方式
+
+以下命令只用于显式开启 EID development mode 的诊断，或由服务端 EID 工具执行器
+内部调用。生产对话不得通过通用 terminal 复制执行这些命令。
 
 ```bash
-# 单个工具（record_id 会自动注入默认值）
+# 单个工具（record_id 由 Hermes 服务端上下文注入，不出现在参数中）
 python3 scripts/tool_dispatcher.py --tool <名称> --params '<JSON>'
 
 # 查询甲板列表
@@ -263,6 +272,13 @@ python3 scripts/tool_dispatcher.py --tool-help get_lights
 # 列出所有工具
 python3 scripts/tool_dispatcher.py --list
 ```
+
+运行时上下文契约：
+- `HERMES_EID_SUBJECT` 和 `HERMES_EID_RECORD_ID` 必须由 Hermes 服务端为当前调用注入。
+- `HERMES_EID_TENANT` 可选；生产调用必须有 `HERMES_EID_DELEGATION`，委托令牌只进入请求头。
+- 只有显式开启 `HERMES_WEBUI_EID_DEVELOPMENT_MODE` 时，才允许在无委托令牌的本地开发流程中调用。
+- 不在命令行、日志、提示词或输出中打印上述环境变量的值。
+- `--params` 中出现 `record_id`、`user_id`、`eid_subject`、`eid_tenant` 或 `delegation_token` 时，调度器必须拒绝调用。
 
 ---
 
@@ -291,7 +307,7 @@ python3 scripts/tool_dispatcher.py --list
 1. 理解用户意图 → 匹配上表中的工具
 2. 提取参数（从用户自然语言中提取 deck_id、compartment_id 等）
 3. **写操作判断：** 如果工具为目标写操作（update_*/create_*/delete_*/bind_*/unbind_*/layout_*），先向用户展示确认表格，再用 `clarify(choices=["✅ Allow (确认执行)", "❌ Reject (取消操作)"])` 工具弹出现代化选择列表获取确认，确认后再调用。详见「写操作用户确认机制」
-4. 调用 tool_dispatcher.py（写操作必须加 `--confirm` 参数）
+4. 生产环境调用对应的 Hermes EID 专用工具；服务端内部适配器再调用 `tool_dispatcher.py`。本地开发写操作必须加 `--confirm`
 5. 如果返回 `validation_error`：
    - 向用户展示结构化表格：缺失参数 + 可用选项
    - 引导用户补充后重试
@@ -348,7 +364,8 @@ python3 scripts/tool_dispatcher.py --list
 
 ## 写操作用户确认机制
 
-所有涉及数据库修改的操作，必须通过 **双层确认** 确保安全：
+所有涉及数据库修改的操作都必须先取得用户确认。生产环境确认后调用 EID 专用写工具；
+下面的终端双层确认只适用于显式 development mode 或服务端工具适配器测试。
 
 ### 第1层：LLM 通过 clarify 工具确认
 
@@ -556,7 +573,7 @@ python3 scripts/tool_dispatcher.py --tool get_lights --params '{"deck_id":"DECK 
 # 见 references/batch-querying-pattern.md
 ```
 
-- 在 `execute_code` 环境的 `hermes_tools` 中只能用 `terminal` 间接调用 dispatcher，无法直接 import — 所以必须用文件中转
+- 该文件中转方式仅用于本地开发诊断；生产环境禁止用 `execute_code` 或通用 `terminal` 绕过 EID 专用工具
 
 ### 15. light_type_id 使用 ID 而非显示名称
 
@@ -584,9 +601,9 @@ python3 scripts/tool_dispatcher.py --tool recommend_light_count --params '{
 
 | 步骤 | 传入参数 | 来源 |
 |------|----------|------|
-| `recommend_light_count` | `record_id, compartment_id, light_type_id, illuminance, utilization, maintenance` | 用户参数 |
-| `verify_illuminance` | `record_id, compartment_id, illuminance, utilization, maintenance, light_type_count` | 用户参数 + 上一步 count |
-| `layout_lights` | `record_id, compartment_id, light_type_count, layout_type` | 用户参数 + 上一步 count |
+| `recommend_light_count` | `record_id, compartment_id, light_type_id, illuminance, utilization, maintenance` | 服务端 record + 用户参数 |
+| `verify_illuminance` | `record_id, compartment_id, illuminance, utilization, maintenance, light_type_count` | 服务端 record + 用户参数 + 上一步 count |
+| `layout_lights` | `record_id, compartment_id, light_type_count, layout_type` | 服务端 record + 用户参数 + 上一步 count |
 
 不共享参数（如 `layout_type` 不传给第一步，`light_type_id` 不传给后两步），避免"unexpected keyword argument"。
 
@@ -716,7 +733,7 @@ python3 scripts/tool_dispatcher.py --tool layout_lights \
   --params '{"compartment_id":"<舱室ID>","light_type_count":[{"light_type_id":"type_02","count":399}],"layout_type":"one_click"}'
 ```
 
-### 24. `--confirm` 在非交互式 terminal 中的操作方式
+### 24. 本地开发中 `--confirm` 的非交互式用法
 
 `tool_dispatcher.py` 的 `--confirm` 标志会等待终端标准输入（`input()` 或 `sys.stdin.readline()`）来确认写操作。在 Hermes 的 `terminal` 工具环境下：
 
@@ -829,7 +846,7 @@ def update_compartment(record_id: str, deck_id: str, compartment_id: str,
 - 函数签名必须使用**显式位置参数**列出每个 API 字段，禁止使用 `**kwargs` 或 `= None` 默认值
 
 **重要规则：所有业务函数的参数必须为必填位置参数，不允许使用 `= None` 默认值或 `**kwargs`。**
-调用时显式传入 `DEFAULT_RECORD_ID` 或实际值，不依赖隐藏默认值。
+内部调用显式传入由调度器绑定的 `HERMES_EID_RECORD_ID`，不得使用隐藏默认值或模型提供的记录 ID。
 
 **API 路径探测规则：** 当 API 返回 404 时，不要假设资源是扁平路径。
 必须尝试嵌套路径格式：`/{领域}/{资源}`。

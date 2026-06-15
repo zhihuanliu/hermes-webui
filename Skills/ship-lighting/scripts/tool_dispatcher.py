@@ -17,6 +17,7 @@ tool_dispatcher.py — 统一工具调度器 v4.0（基于 HTTP API）
 import sys
 import json
 import argparse
+import os
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).parent
@@ -157,9 +158,11 @@ COMPOSITE_MAP = {
 def run_tool(tool: str, params: dict) -> dict:
     """执行工具：校验 → API 调用 → 返回结果"""
 
-    # Step 0: 自动注入默认 record_id
-    if "record_id" not in params or not params.get("record_id"):
-        params["record_id"] = api_client.DEFAULT_RECORD_ID
+    # Step 0: bind server-trusted EID context. Public tool arguments must not
+    # contain record_id because the model/browser is not an authority for it.
+    context_error = _bind_trusted_eid_context(tool, params)
+    if context_error:
+        return context_error
 
     # Step 1: 检查是否为组合工具
     if tool in COMPOSITE_MAP:
@@ -197,8 +200,6 @@ def run_tool(tool: str, params: dict) -> dict:
     # Step 4: 调用 API
     try:
         clean_params = validation.get("params", params)
-        # 如果 params 里有 record_id，去掉、自动注入
-        # api_client 函数已经内置了 DEFAULT_RECORD_ID
         result = api_func(**clean_params)
     except TypeError as e:
         return {
@@ -340,13 +341,10 @@ def _build_validation_error(tool: str, validation: dict) -> dict:
     if "invalid_params" in validation:
         result["invalid_params"] = validation["invalid_params"]
 
-    if "default_record_id" in validation:
-        result["default_record_id"] = validation["default_record_id"]
-
     # 对常见缺失参数，附带可用的可选值提示
     if "deck_id" in missing or "deck" in str(missing).lower():
         try:
-            decks = api_client.get_decks()
+            decks = api_client.get_decks(os.environ["HERMES_EID_RECORD_ID"])
             if isinstance(decks, list) and decks:
                 result["available_decks"] = [
                     {"deck_id": d["deck_id"], "deck_name": d.get("deck_name", d["deck_id"]),
@@ -356,6 +354,59 @@ def _build_validation_error(tool: str, validation: dict) -> dict:
             pass
 
     return result
+
+
+def _bind_trusted_eid_context(tool: str, params: dict) -> dict | None:
+    """Inject the authorized session record and reject caller-controlled IDs."""
+    protected = sorted({
+        "record_id", "user_id", "eid_subject", "eid_tenant",
+        "delegation_token",
+    }.intersection(params))
+    if protected:
+        return {
+            "tool": tool,
+            "status": "context_error",
+            "error_type": "caller_supplied_eid_context",
+            "protected_params": protected,
+            "message": "EID 用户与 record 上下文由 Hermes 服务端绑定，工具参数不得提供或覆盖",
+        }
+
+    subject = os.environ.get("HERMES_EID_SUBJECT", "").strip()
+    if not subject:
+        return {
+            "tool": tool,
+            "status": "context_error",
+            "error_type": "missing_eid_identity",
+            "message": "当前没有可信的 EID 登录上下文，请重新登录后再试",
+        }
+
+    record_id = os.environ.get("HERMES_EID_RECORD_ID", "").strip()
+    if not record_id:
+        return {
+            "tool": tool,
+            "status": "context_error",
+            "error_type": "missing_record_context",
+            "message": "当前会话未绑定 EID 记录，请先打开或选择记录",
+        }
+
+    delegation = os.environ.get("HERMES_EID_DELEGATION", "").strip()
+    development_mode = os.environ.get(
+        "HERMES_WEBUI_EID_DEVELOPMENT_MODE", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not delegation and not development_mode:
+        return {
+            "tool": tool,
+            "status": "context_error",
+            "error_type": "missing_eid_delegation",
+            "message": "当前运行后端未提供 EID 委托令牌，已拒绝业务工具调用",
+        }
+
+    api_tool = param_validator.get_tool_name(tool)
+    rules = param_validator.TOOL_RULES.get(api_tool, {})
+    fields = rules.get("required", []) + rules.get("optional", [])
+    if tool in COMPOSITE_MAP or "record_id" in fields:
+        params["record_id"] = record_id
+    return None
 
 
 def _get_api_params(func) -> str:
@@ -490,12 +541,17 @@ def main():
 
         # --confirm: 写操作前要求用户确认
         if args.confirm and _is_write_tool(args.tool):
+            context_error = _bind_trusted_eid_context(args.tool, dict(params))
+            if context_error:
+                print(json.dumps(context_error, ensure_ascii=False, indent=2))
+                return
             _prompt_confirm(args.tool, params)
 
-        validation = param_validator.validate(args.tool, params)
-
         if args.validate_only:
-            result = validation
+            context_error = _bind_trusted_eid_context(args.tool, params)
+            result = context_error or param_validator.validate(args.tool, params)
+            if not context_error and result.get("valid"):
+                result["params"].pop("record_id", None)
         else:
             result = run_tool(args.tool, params)
 

@@ -386,6 +386,10 @@ def redact_session_data(session_dict: dict) -> dict:
     from api.config import load_settings
     _enabled = bool(load_settings().get("api_redact_enabled", True))
     result = dict(session_dict)
+    # Trusted EID identity is server-side state: it must never round-trip
+    # through the browser (it is re-resolved from proxy headers per request).
+    result.pop('eid_subject', None)
+    result.pop('eid_tenant', None)
     if isinstance(result.get('title'), str):
         result['title'] = _redact_text(result['title'], _enabled=_enabled)
     if 'messages' in result:

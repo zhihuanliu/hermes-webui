@@ -30,6 +30,11 @@
 <script src="static/pwa-startup.js?v=__WEBUI_VERSION__"></script>
 <script>window.__HERMES_CONFIG__={maxUploadBytes:__MAX_UPLOAD_BYTES__,csrfToken:__CSRF_TOKEN_JSON__};</script>
 <script>(function(){
+  var params=new URLSearchParams(location.search);
+  var recordId=(params.get('record_id')||'').trim();
+  window.__HERMES_CHATBOT_CONTEXT__={recordId:recordId||null};
+})()</script>
+<script>(function(){
   var cfg=window.__HERMES_CONFIG__||{},token=cfg.csrfToken||'';
   if(!token||!window.fetch)return;
   var originalFetch=window.fetch.bind(window);
@@ -853,7 +858,7 @@ if (_btnNew) {
   _btnNew.onclick = async function() {
     if (_btnNew.getAttribute('aria-busy') === 'true') return;
     _cbCloseSidebar();
-    await newSession();
+    await newSession(false,{forceNewRecord:true});
     await renderSessionList();
     document.getElementById('msg')?.focus();
   };

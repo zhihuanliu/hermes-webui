@@ -3,8 +3,8 @@
 ## 基础信息
 
 - **Base URL**: `http://192.168.208.23:5000/api/v1/`
-- **默认 record_id**: `ed18461b23884c569e2366c228378825`
-- **认证**: 内网无需认证
+- **record_id**: 由 Hermes 服务端绑定的当前已授权记录注入，无固定默认值
+- **认证**: 每次请求携带 Hermes 注入的 EID 身份头；生产调用必须携带短期委托令牌
 - **响应格式**: `{"code": 0, "message": "success", "data": {...}}`
 
 ## 可用端点
@@ -23,7 +23,7 @@
 {
   "code": 0,
   "data": {
-    "record_id": "ed18461b23884c569e2366c228378825",
+    "record_id": "<authorized-record-id>",
     "decks": [
       {
         "deck_id": "DECK 4",
@@ -76,7 +76,7 @@ stage 取值: `recognition_completed` / `primary_completed` / `secondary_complet
 
 以下 JSON 定义了 **所有子功能的接口规范**，当前 `/api/v1/decks` 仅返回甲板基本信息（无嵌套 compartments）。此 Schema 是最终目标——一个 `GET /decks` 返回完整的甲板→舱室→设备嵌套数据。
 
-**默认 record_id**: `ed18461b23884c569e2366c228378825`
+**record_id 来源**: Hermes 服务端可信 EID 会话上下文。
 
 ```json
 {
@@ -157,26 +157,15 @@ stage 取值: `recognition_completed` / `primary_completed` / `secondary_complet
 
 ## 2026-06-03 端点探测记录
 
-以下命令在本会话中实际执行过：
+以下路径在历史开发会话中探测过。它们仅作为路径兼容性记录，不是可执行命令；
+Skill 运行时必须通过 `tool_dispatcher.py` 访问。
 
 ### 已验证可用 ✅
 
-```bash
-# 甲板列表（返回基本信息）
-curl -s "http://192.168.208.23:5000/api/v1/decks?record_id=ed18461b23884c569e2366c228378825"
-
-# 导入记录
-curl -s "http://192.168.208.23:5000/api/v1/records"
-```
+- `GET /api/v1/decks`：返回甲板基本信息。
+- `GET /api/v1/records`：返回当前授权 record 范围内的导入记录。
 
 ### 已验证 404 ❌
 
-```bash
-# 所有以下端点均返回 {"code": 4002, "message": "资源不存在"}
-curl -s "http://192.168.208.23:5000/api/v1/decks/DECK%204?record_id=xxx"
-curl -s "http://192.168.208.23:5000/api/v1/compartments?record_id=xxx"
-curl -s "http://192.168.208.23:5000/api/v1/compartment?record_id=xxx"
-curl -s "http://192.168.208.23:5000/api/v1/deck?record_id=xxx"
-curl -s "http://192.168.208.23:5000/api/v1/record/xxx"
-curl -s -X POST "http://192.168.208.23:5000/api/v1/decks" ...
-```
+历史上返回资源不存在的扁平路径包括 `/compartments`、`/compartment`、`/deck`
+和 `/record/{id}`。使用本文档前面的嵌套资源路径。

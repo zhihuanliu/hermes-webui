@@ -478,11 +478,6 @@ def validate(tool: str, params: dict) -> dict:
             "param_details": {k: types.get(k, "") for k in missing},
         }
 
-        # 动态获取可选值（默认 record_id 自动补）
-        if "record_id" in missing:
-            result["default_record_id"] = "ed18461b23884c568e2366c228378825"
-            result["hint"] += "\n提示：record_id 可默认使用 ed18461b23884c569e2366c228378825"
-
         return result
 
     # 2. 检查枚举值合法性
@@ -538,9 +533,9 @@ def get_tool_help(tool: str) -> dict:
     return {
         "tool": tool,
         "api_tool": api_tool,
-        "required": rules.get("required", []),
-        "optional": rules.get("optional", []),
-        "types": rules.get("types", {}),
+        "required": [p for p in rules.get("required", []) if p != "record_id"],
+        "optional": [p for p in rules.get("optional", []) if p != "record_id"],
+        "types": {k: v for k, v in rules.get("types", {}).items() if k != "record_id"},
         "enums": rules.get("enums", {}),
         "hints": rules.get("hints", {}),
     }

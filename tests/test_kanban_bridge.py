@@ -405,6 +405,31 @@ def test_board_pointer_drift_falls_back_to_default(monkeypatch):
     assert any(board["slug"] == "default" and board["is_current"] for board in data["boards"])
 
 
+def test_windows_msvcrt_lock_unreliable_detects_wsl_unc_paths(monkeypatch):
+    bridge = _load_bridge(monkeypatch)
+
+    assert bridge._windows_msvcrt_lock_unreliable(
+        r"\\wsl.localhost\Ubuntu\home\cughuan\.hermes\kanban\default\kanban.db"
+    )
+    assert not bridge._windows_msvcrt_lock_unreliable(r"C:\Users\me\.hermes\kanban\default\kanban.db")
+
+
+def test_kb_patches_cross_process_init_lock_once(monkeypatch):
+    bridge = _load_bridge(monkeypatch)
+    fake_kanban = sys.modules["hermes_cli.kanban_db"]
+    fake_kanban._hermes_webui_lock_patch_applied = False
+    fake_kanban._cross_process_init_lock = lambda path: None
+
+    original = fake_kanban._cross_process_init_lock
+    bridge._patch_cross_process_init_lock(fake_kanban)
+    first = fake_kanban._cross_process_init_lock
+    bridge._patch_cross_process_init_lock(fake_kanban)
+
+    assert fake_kanban._hermes_webui_lock_patch_applied is True
+    assert first is fake_kanban._cross_process_init_lock
+    assert first is not original
+
+
 def test_kanban_task_detail_payload_exposes_comments_events_links_and_runs(monkeypatch):
     bridge = _load_bridge(monkeypatch)
 

@@ -298,6 +298,8 @@ def _webui_surface_context_prompt(surface_context: Optional[dict]) -> str:
         ("session_id", "Session ID"),
         ("profile", "Profile"),
         ("workspace", "Workspace"),
+        ("record_id", "Authorized EID record ID"),
+        ("context_type", "Business context type"),
     )
     for key, label in fields:
         raw = surface_context.get(key)
@@ -1147,7 +1149,9 @@ def _extract_gateway_routing_metadata(agent, result, requested_model=None, reque
     return None
 
 
-def _build_agent_thread_env(profile_runtime_env: dict | None, workspace: str, session_id: str, profile_home: str) -> dict:
+def _build_agent_thread_env(profile_runtime_env: dict | None, workspace: str, session_id: str,
+                            profile_home: str, eid_subject: str | None = None,
+                            record_id: str | None = None) -> dict:
     """Build thread-local agent env with per-run values overriding profile defaults.
 
     Profile runtime env may include TERMINAL_CWD from config.yaml. Passing it as
@@ -1163,6 +1167,10 @@ def _build_agent_thread_env(profile_runtime_env: dict | None, workspace: str, se
         'HERMES_SESSION_PLATFORM': 'webui',
         'HERMES_HOME': profile_home,
     })
+    if eid_subject:
+        env['HERMES_EID_SUBJECT'] = str(eid_subject)
+    if record_id:
+        env['HERMES_EID_RECORD_ID'] = str(record_id)
     return env
 
 
@@ -4619,6 +4627,10 @@ def _run_agent_streaming(
             _profile_home = os.environ.get('HERMES_HOME', '')
             _profile_runtime_env = {}
             patch_skill_home_modules = None
+        if getattr(s, 'eid_subject', None):
+            # A profile-level fixed record is unsafe for dynamic, user-scoped EID
+            # sessions. Keep it out of both thread and process fallback envs.
+            _profile_runtime_env.pop('SHIP_LIGHTING_RECORD_ID', None)
         
         # Capture the resolved profile name now, while profile context is
         # reliable. Used in the compression migration block to stamp s.profile
@@ -4642,6 +4654,8 @@ def _run_agent_streaming(
             str(s.workspace),
             session_id,
             _profile_home,
+            getattr(s, 'eid_subject', None),
+            getattr(s, 'record_id', None),
         )
         _set_thread_env(**_thread_env)
         # Prewarm skill-tool imports *before* acquiring the lock so that
@@ -5633,6 +5647,8 @@ def _run_agent_streaming(
                     'session_id': session_id,
                     'profile': getattr(s, 'profile', None),
                     'workspace': s.workspace,
+                    'record_id': getattr(s, 'record_id', None),
+                    'context_type': getattr(s, 'context_type', None),
                 },
                 config_data=_cfg,
             )

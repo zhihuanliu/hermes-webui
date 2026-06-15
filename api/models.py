@@ -549,6 +549,8 @@ class Session:
                  messages=None, created_at=None, updated_at=None,
                  tool_calls=None, pinned: bool=False, archived: bool=False,
                  project_id: str=None, profile=None,
+                 eid_subject=None, eid_tenant=None, record_id=None,
+                 context_type=None,
                  input_tokens: int=0, output_tokens: int=0, estimated_cost=None,
                  cache_read_tokens: int=0, cache_write_tokens: int=0,
                  personality=None,
@@ -592,6 +594,10 @@ class Session:
         self.archived = bool(archived)
         self.project_id = project_id or None
         self.profile = profile
+        self.eid_subject = str(eid_subject).strip() if eid_subject else None
+        self.eid_tenant = str(eid_tenant).strip() if eid_tenant else None
+        self.record_id = str(record_id).strip() if record_id else None
+        self.context_type = context_type or ('eid-record' if self.record_id else 'general')
         self.input_tokens = input_tokens or 0
         self.output_tokens = output_tokens or 0
         self.estimated_cost = estimated_cost
@@ -673,6 +679,7 @@ class Session:
         METADATA_FIELDS = [
             'session_id', 'title', 'workspace', 'model', 'model_provider', 'created_at', 'updated_at',
             'pinned', 'archived', 'project_id', 'profile',
+            'eid_subject', 'eid_tenant', 'record_id', 'context_type',
             'input_tokens', 'output_tokens', 'estimated_cost',
             'cache_read_tokens', 'cache_write_tokens',
             'personality', 'active_stream_id',
@@ -868,6 +875,10 @@ class Session:
             'archived': self.archived,
             'project_id': self.project_id,
             'profile': self.profile,
+            'eid_subject': self.eid_subject,
+            'eid_tenant': self.eid_tenant,
+            'record_id': self.record_id,
+            'context_type': self.context_type,
             'input_tokens': self.input_tokens,
             'output_tokens': self.output_tokens,
             'estimated_cost': self.estimated_cost,
@@ -2302,7 +2313,9 @@ def _profile_default_model_state(profile=None):
     return default_model or get_effective_default_model(), default_provider
 
 
-def new_session(workspace=None, model=None, profile=None, model_provider=None, project_id=None, worktree_info=None):
+def new_session(workspace=None, model=None, profile=None, model_provider=None, project_id=None,
+                worktree_info=None, eid_subject=None, eid_tenant=None, record_id=None,
+                context_type=None):
     """Create a new in-memory session.
 
     The session lives in the SESSIONS dict only — no disk write happens until
@@ -2350,6 +2363,10 @@ def new_session(workspace=None, model=None, profile=None, model_provider=None, p
         model_provider=effective_model_provider,
         profile=profile,
         project_id=project_id,
+        eid_subject=eid_subject,
+        eid_tenant=eid_tenant,
+        record_id=record_id,
+        context_type=context_type,
         personality=None,
         worktree_path=wt.get('path') if wt else None,
         worktree_branch=wt.get('branch') if wt else None,
@@ -2906,6 +2923,7 @@ def all_sessions(diag=None):
                 and not s.get('active_stream_id')
                 and not s.get('has_pending_user_message')
                 and not s.get('worktree_path')
+                and not s.get('eid_subject')
             )]
             result = _prefer_fuller_snapshots_for_sidebar(result)
             sidebar_candidates = result
@@ -2947,6 +2965,7 @@ def all_sessions(diag=None):
         and not s.active_stream_id
         and not s.pending_user_message
         and not getattr(s, 'worktree_path', None)
+        and not getattr(s, 'eid_subject', None)
     )]
     result = _prefer_fuller_snapshots_for_sidebar(result)
     sidebar_candidates = result

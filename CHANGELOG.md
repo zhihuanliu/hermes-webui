@@ -3,8 +3,13 @@
 
 ## [Unreleased]
 
+### Fixed
+- Kanban board loads on Windows when `HERMES_HOME` / kanban data lives on a WSL UNC path (`\\wsl.localhost\...`). Windows `msvcrt` byte-range locks fail on those paths with `Resource deadlock avoided`; the WebUI bridge now skips the init lock there and returns a clear 503 if filesystem locking still fails.
+
 ### Changed
 - Allowed Hermes WebUI to be embedded by the local development host app at `http://localhost:5174` using enforced CSP `frame-ancestors 'self' http://localhost:5174`, with `X-Frame-Options: ALLOW-FROM http://localhost:5174` as the legacy-browser fallback.
+- Added a default-off EID embedded-chat boundary: trusted proxy/development identities, fail-closed record authorization, `(subject, tenant, record, profile)` session ownership, record create/restore via `/api/session/resolve`, record-scoped chatbot lists, and non-persisted Agent/Gateway record context. EID sessions ignore profile-level `SHIP_LIGHTING_RECORD_ID` defaults. Successful record authorizations are cached in-process for `HERMES_WEBUI_EID_AUTHORIZE_CACHE_TTL` seconds (denials never cached) so per-request guards do not flood the EID backend, and trusted identity fields (`eid_subject`/`eid_tenant`) are stripped from every browser-facing session payload, including SSE `done` events.
+- Fixed EID embedded session creation behind multi-hop reverse proxies by parsing comma-separated forwarded-host chains during CSRF same-origin checks. CSRF and EID authorization 403s now log a safe rejection category without identities, record IDs, or tokens.
 
 ### Docs
 - Added a Simplified Chinese onboarding and secondary-development guide for junior Web engineers, covering the project shape, Windows 11/PowerShell and WSL2 setup paths, code map, starter customization examples, debugging, and contribution flow.
@@ -12,6 +17,7 @@
 - Added a Simplified Chinese guided reading document for `static/sessions.js`, covering its session-management role, module breakdown, key line-by-line walkthroughs, JS learning points, and refactoring opportunities.
 - Added a Simplified Chinese guided reading document for `static/messages.js`, covering its chat runtime role, send/stream lifecycle, SSE event handling, recovery paths, performance techniques, and JS practice prompts.
 - Added a LeanSpec record for the iframe embedding security-header contract.
+- Added and began implementing the EID authentication, record authorization, session isolation, and Skill-context LeanSpec.
 
 ## [v0.51.262] — 2026-06-04 — Release ID (stage-r12 — zh localization + Docker reveal-path + recall-prefill role fix)
 

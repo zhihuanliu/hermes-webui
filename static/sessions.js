@@ -514,6 +514,15 @@ function _markPollingCompletionUnreadTransitions(sessions) {
 }
 
 let _newSessionInFlight=null;
+function _eidRecordId(){
+  return String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.recordId||'').trim();
+}
+function _withEidSessionScope(path){
+  const recordId=_eidRecordId();
+  if(!recordId)return path;
+  const separator=path.includes('?')?'&':'?';
+  return `${path}${separator}record_id=${encodeURIComponent(recordId)}`;
+}
 const _newSessionPendingText=()=>t('new_session_creating')||'Creating new conversation…';
 function _setNewSessionPending(pending){
   const btn=$('btnNewChat');
@@ -555,6 +564,11 @@ async function newSession(flash, options={}){
     };
     if(S.session&&S.session.session_id) reqBody.prev_session_id=S.session.session_id;
     if(options&&options.worktree) reqBody.worktree=true;
+    const eidRecordId=_eidRecordId();
+    if(eidRecordId){
+      reqBody.record_id=eidRecordId;
+      reqBody.force_new=Boolean(options&&options.forceNewRecord);
+    }
     if(_activeProject&&_activeProject!==NO_PROJECT_FILTER) reqBody.project_id=_activeProject;
     // Carry the visible picker selection into the new session. Without this,
     // /api/session/new falls back to config.yaml defaults (e.g. gpt-5.5) even
@@ -608,7 +622,13 @@ async function newSession(flash, options={}){
         ||((_bareModel&&!_familyMismatch)?(_fallbackProvider||null):null)
         ||null;
     }
-    const data=await api('/api/session/new',{method:'POST',body:JSON.stringify(reqBody)});
+    const createStandardSession=async()=>{
+      const data=await api('/api/session/new',{method:'POST',body:JSON.stringify(reqBody)});
+      return data;
+    };
+    const data=eidRecordId
+      ?await api('/api/session/resolve',{method:'POST',body:JSON.stringify(reqBody)})
+      :await createStandardSession();
     S.session=data.session;S.messages=data.session.messages||[];
     if(_sessionSourceFilter==='cli') _sessionSourceFilter='webui';
     if(typeof _hydrateTodosFromSession==='function') _hydrateTodosFromSession(S.session);
@@ -2190,7 +2210,7 @@ function _renderBatchActionBar(){
       if(S.session&&ids.includes(S.session.session_id)){
         S.session=null;S.messages=[];S.entries=[];localStorage.removeItem('hermes-webui-session');
         if(typeof _hydrateTodosFromSession==='function') _hydrateTodosFromSession(null);
-        const remaining=await api('/api/sessions');
+        const remaining=await api(_withEidSessionScope('/api/sessions'));
         if(remaining.sessions&&remaining.sessions.length){await loadSession(remaining.sessions[0].session_id);}
         else{$('msgInner').innerHTML='';$('emptyState').style.display='';}
       }
@@ -2836,8 +2856,11 @@ async function _runRenderSessionListRefresh(opts, _gen){
   try{
     if(!($('sessionSearch').value||'').trim()) _contentSearchResults = [];
     const allProfilesQS = _showAllProfiles ? '?all_profiles=1' : '';
+    const sessionsRequest=_eidRecordId()
+      ?api(_withEidSessionScope('/api/sessions' + allProfilesQS),{timeoutToast:false})
+      :api('/api/sessions' + allProfilesQS,{timeoutToast:false});
     const [sessData, projData] = await Promise.all([
-      api('/api/sessions' + allProfilesQS,{timeoutToast:false}),
+      sessionsRequest,
       api('/api/projects' + allProfilesQS,{timeoutToast:false}),
     ]);
     // Discard stale response — a newer renderSessionList() call superseded us.
@@ -3394,7 +3417,7 @@ function filterSessions(){
   _searchDebounceTimer = setTimeout(async () => {
     const requestedQ = q;
     try {
-      const data = await api(`/api/sessions/search?q=${encodeURIComponent(requestedQ)}&content=1&depth=5`);
+      const data = await api(_withEidSessionScope(`/api/sessions/search?q=${encodeURIComponent(requestedQ)}&content=1&depth=5`));
       const currentQ = ($('sessionSearch').value || '').trim();
       if(currentQ!==requestedQ) return;
       const directAndTitleMatches=_sessionSearchDirectAndTitleMatches(_allSessions,currentQ);
@@ -5262,7 +5285,7 @@ async function deleteSession(sid, beforeDelete=null){
     if(typeof _hydrateTodosFromSession==='function') _hydrateTodosFromSession(null);
     localStorage.removeItem('hermes-webui-session');
     // load the most recent remaining session, or show blank if none left
-    const remaining=await api('/api/sessions');
+    const remaining=await api(_withEidSessionScope('/api/sessions'));
     if(remaining.sessions&&remaining.sessions.length){
       await loadSession(remaining.sessions[0].session_id);
     }else{

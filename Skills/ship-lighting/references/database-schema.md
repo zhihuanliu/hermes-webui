@@ -31,9 +31,9 @@
 | `/api/v1/decks` | GET | record_id | 甲板列表（deck_id, name, height, url） |
 | `/api/v1/records` | GET | record_id | 导入记录列表 |
 
-### 默认 record_id
+### record_id 来源
 
-`ed18461b23884c569e2366c228378825`
+由 Hermes 服务端从当前已鉴权 EID 会话注入。不得从 profile、模型参数或固定默认值获取。
 
 ## 审批存储（本地 JSON）
 

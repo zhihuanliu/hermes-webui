@@ -46,6 +46,12 @@ curl host/api/v1/allocation/bind-compartment
 curl host/api/v1/tools/measure-point
 curl host/api/v1/drawings/primary-parse
 ```
+此文档只记录路径设计规律。Skill 运行时禁止用 `curl` 绕过 `tool_dispatcher.py`，
+因为直接请求不会自动绑定 Hermes 的可信 EID 用户、record 和委托上下文。
+
+后端开发人员在独立、受控的诊断环境中探测端点时，应使用 EID 官方认证客户端，
+并按“顶层领域 -> 嵌套资源 -> 详情/动作 -> 跨领域操作”的顺序检查路径。
+不得把诊断凭证、身份头或委托令牌写入本文档、命令历史或日志。
 
 ## 对应关系
 

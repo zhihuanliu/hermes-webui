@@ -37,8 +37,103 @@ from api.session_events import (
     subscribe_session_events,
     unsubscribe_session_events,
 )
+from api.eid_context import (
+    EidContextError,
+    authorize_record_access,
+    eid_context_enabled,
+    session_matches_record,
+    session_owned_by_context,
+    trusted_eid_context,
+    validate_record_id,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _eid_context_or_error(handler):
+    try:
+        return trusted_eid_context(handler), False
+    except EidContextError as exc:
+        bad(handler, str(exc), status=exc.status)
+        return None, True
+
+
+def _eid_session_access_allowed(handler, session) -> bool:
+    if not eid_context_enabled():
+        return True
+    context, error_sent = _eid_context_or_error(handler)
+    if error_sent:
+        return False
+    if context is None or not session_owned_by_context(session, context):
+        bad(handler, "Session not found", status=404)
+        return False
+    record_id = getattr(session, "record_id", None)
+    if record_id:
+        try:
+            authorize_record_access(context, record_id)
+        except EidContextError as exc:
+            bad(handler, str(exc), status=exc.status)
+            return False
+    return True
+
+
+def _eid_filter_session_rows(handler, rows, parsed):
+    if not eid_context_enabled():
+        return rows, None
+    context, error_sent = _eid_context_or_error(handler)
+    if error_sent:
+        return None, True
+    try:
+        query = parse_qs(parsed.query)
+        requested_record = validate_record_id(query.get("record_id", [""])[0], required=False)
+    except EidContextError as exc:
+        bad(handler, str(exc), status=exc.status)
+        return None, True
+    scoped = [row for row in rows if context is not None and session_owned_by_context(row, context)]
+    if requested_record:
+        try:
+            authorize_record_access(context, requested_record)
+        except EidContextError as exc:
+            bad(handler, str(exc), status=exc.status)
+            return None, True
+        scoped = [row for row in scoped if session_matches_record(row, requested_record)]
+    else:
+        scoped = [row for row in scoped if session_matches_record(row, None)]
+    return scoped, False
+
+
+def _public_eid_session_data(payload):
+    """Remove trusted identity fields before returning session data to browsers."""
+    public = dict(payload)
+    public.pop("eid_subject", None)
+    public.pop("eid_tenant", None)
+    return public
+
+
+def _eid_stream_access_allowed(handler, stream_id: str) -> bool:
+    if not eid_context_enabled():
+        return True
+    session_id = ""
+    try:
+        summary = find_run_summary(stream_id) if stream_id else None
+        session_id = str((summary or {}).get("session_id") or "")
+    except Exception:
+        session_id = ""
+    if not session_id:
+        with LOCK:
+            for candidate in SESSIONS.values():
+                if getattr(candidate, "active_stream_id", None) == stream_id:
+                    session_id = candidate.session_id
+                    break
+    if not session_id:
+        bad(handler, "Stream not found", status=404)
+        return False
+    try:
+        session = get_session(session_id, metadata_only=True)
+    except KeyError:
+        bad(handler, "Stream not found", status=404)
+        return False
+    return _eid_session_access_allowed(handler, session)
 
 # ── Cron run tracking ────────────────────────────────────────────────────────
 # Track job IDs currently being executed so the frontend can poll status.
@@ -1369,6 +1464,11 @@ def _normalize_host_port(value: str) -> tuple[str, str | None]:
     return value, None
 
 
+def _forwarded_host_values(value: str) -> list[str]:
+    """Return host entries from a potentially comma-separated proxy chain."""
+    return [part.strip() for part in str(value or "").split(",") if part.strip()]
+
+
 def _ports_match(origin_scheme: str, origin_port: str | None, allowed_port: str | None) -> bool:
     """Return True when two ports should be considered equivalent, scheme-aware.
 
@@ -1484,15 +1584,13 @@ def _check_csrf(handler) -> bool:
         # Allow same-origin: check Host, X-Forwarded-Host (reverse proxy), and
         # X-Real-Host against the origin. Reverse proxies (Caddy, nginx) set
         # X-Forwarded-Host to the client's original Host header.
-        allowed_hosts = [
-            h.strip()
-            for h in [
-                host,
-                handler.headers.get("X-Forwarded-Host", ""),
-                handler.headers.get("X-Real-Host", ""),
-            ]
-            if h.strip()
-        ]
+        allowed_hosts = _forwarded_host_values(host)
+        allowed_hosts.extend(
+            _forwarded_host_values(handler.headers.get("X-Forwarded-Host", ""))
+        )
+        allowed_hosts.extend(
+            _forwarded_host_values(handler.headers.get("X-Real-Host", ""))
+        )
         for allowed in allowed_hosts:
             allowed_name, allowed_port = _normalize_host_port(allowed)
             if origin_name == allowed_name and _ports_match(origin_scheme, origin_port, allowed_port):
@@ -4666,6 +4764,16 @@ def _serve_manifest(handler) -> bool:
 def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
 
+    if eid_context_enabled() and parsed.path.startswith("/api/"):
+        guarded_sid = parse_qs(parsed.query).get("session_id", [""])[0]
+        if guarded_sid:
+            try:
+                guarded_session = get_session(guarded_sid, metadata_only=True)
+            except KeyError:
+                return bad(handler, "Session not found", status=404)
+            if not _eid_session_access_allowed(handler, guarded_session):
+                return True
+
     if parsed.path.startswith("/session/static/"):
         # Strip the leading "/session" so _serve_static() sees a path that
         # starts with "/static/" (its required prefix). _serve_static enforces
@@ -5252,6 +5360,7 @@ def handle_get(handler, parsed) -> bool:
                 raw["model"] = effective_model
             if effective_provider:
                 raw["model_provider"] = effective_provider
+            raw = _public_eid_session_data(raw)
             redact = redact_session_data(raw)
             _t5 = _time.monotonic()
             resp = j(handler, {"session": redact})
@@ -5473,6 +5582,10 @@ def handle_get(handler, parsed) -> bool:
                 key=lambda s: s.get("last_message_at") or s.get("updated_at", 0) or 0,
                 reverse=True,
             )
+            diag.stage("eid_filter")
+            merged, eid_error_sent = _eid_filter_session_rows(handler, merged, parsed)
+            if eid_error_sent:
+                return True
             # ── Profile scoping (#1611) ────────────────────────────────────────
             # Default: filter to the active profile. ?all_profiles=1 opts into
             # the aggregate view used by the "All profiles" sidebar toggle.
@@ -5513,6 +5626,7 @@ def handle_get(handler, parsed) -> bool:
             safe_merged = []
             for s in scoped:
                 item = dict(s)
+                item = _public_eid_session_data(item)
                 if isinstance(item.get("title"), str):
                     item["title"] = _redact_text(item["title"])
                 item["attention"] = _session_attention_summary(str(item.get("session_id") or ""))
@@ -5680,6 +5794,8 @@ def handle_get(handler, parsed) -> bool:
 
     if parsed.path == "/api/chat/stream/status":
         stream_id = parse_qs(parsed.query).get("stream_id", [""])[0]
+        if not _eid_stream_access_allowed(handler, stream_id):
+            return True
         active = stream_id in STREAMS
         payload = {"active": active, "stream_id": stream_id, "replay_available": False}
         try:
@@ -5695,6 +5811,8 @@ def handle_get(handler, parsed) -> bool:
         stream_id = parse_qs(parsed.query).get("stream_id", [""])[0]
         if not stream_id:
             return bad(handler, "stream_id required")
+        if not _eid_stream_access_allowed(handler, stream_id):
+            return True
         from api.runtime_adapter import LegacyJournalRuntimeAdapter, runtime_adapter_enabled
 
         if runtime_adapter_enabled():
@@ -5705,6 +5823,9 @@ def handle_get(handler, parsed) -> bool:
         return j(handler, {"ok": True, "cancelled": cancelled, "stream_id": stream_id})
 
     if parsed.path == "/api/chat/stream":
+        stream_id = parse_qs(parsed.query).get("stream_id", [""])[0]
+        if not _eid_stream_access_allowed(handler, stream_id):
+            return True
         return _handle_sse_stream(handler, parsed)
 
     if parsed.path == "/api/terminal/output":
@@ -6197,6 +6318,11 @@ def handle_post(handler, parsed) -> bool:
     if diag:
         diag.stage("csrf")
     if not _csrf_exempt_path(parsed.path) and not _check_csrf(handler):
+        logger.warning(
+            "POST %s rejected by CSRF guard: %s",
+            parsed.path,
+            getattr(handler, _CSRF_FAILURE_ATTR, "unknown"),
+        )
         try:
             return j(handler, {"error": _csrf_rejection_error(handler)}, status=403)
         finally:
@@ -6238,6 +6364,25 @@ def handle_post(handler, parsed) -> bool:
             diag.finish()
         raise
 
+    if (
+        eid_context_enabled()
+        and parsed.path not in {
+            "/api/session/new",
+            "/api/session/resolve",
+            "/api/session/recovery/repair-safe",
+            "/api/session/import",
+            "/api/session/import_cli",
+        }
+    ):
+        requested_sid = str(body.get("session_id") or "").strip()
+        if requested_sid:
+            try:
+                requested_session = get_session(requested_sid, metadata_only=True)
+            except KeyError:
+                return bad(handler, "Session not found", status=404)
+            if not _eid_session_access_allowed(handler, requested_session):
+                return True
+
     if parsed.path == "/api/session/recovery/repair-safe":
         from api.session_recovery import repair_safe_session_recovery
         result = repair_safe_session_recovery(SESSION_DIR, state_db_path=_active_state_db_path())
@@ -6261,6 +6406,81 @@ def handle_post(handler, parsed) -> bool:
             logger.exception("dashboard config save failed")
             bad(handler, str(exc), status=500)
         return True
+
+    if parsed.path == "/api/session/resolve":
+        context, error_sent = _eid_context_or_error(handler)
+        if error_sent:
+            return True
+        if context is None:
+            return bad(handler, "EID context is not enabled", status=409)
+        try:
+            record_id = validate_record_id(body.get("record_id"))
+            authorize_record_access(context, record_id or "")
+        except EidContextError as exc:
+            logger.warning(
+                "EID session resolve rejected: %s status=%s",
+                type(exc).__name__,
+                exc.status,
+            )
+            return bad(handler, str(exc), status=exc.status)
+
+        requested_profile = body.get("profile") or None
+        candidates = [
+            row for row in all_sessions()
+            if session_owned_by_context(row, context)
+            and session_matches_record(row, record_id)
+            and _profiles_match(row.get("profile"), requested_profile or row.get("profile"))
+            and not row.get("archived")
+        ]
+        candidates.sort(key=lambda row: row.get("updated_at", 0) or 0, reverse=True)
+        force_new = body.get("force_new") is True
+        if candidates and not force_new:
+            try:
+                existing = get_session(candidates[0]["session_id"])
+            except KeyError:
+                existing = None
+            if existing is not None:
+                return j(handler, {
+                    "session": _public_eid_session_data(
+                        existing.compact() | {"messages": existing.messages}
+                    ),
+                    "created": False,
+                })
+        if force_new:
+            for row in candidates:
+                try:
+                    previous = get_session(row["session_id"])
+                    previous.archived = True
+                    previous.save()
+                except Exception:
+                    logger.debug("Failed to archive prior EID record session", exc_info=True)
+
+        try:
+            workspace = str(resolve_trusted_workspace(body.get("workspace"))) if body.get("workspace") else None
+        except (TypeError, ValueError) as exc:
+            return bad(handler, str(exc))
+        model, model_provider = _session_model_state_from_request(
+            body.get("model"), body.get("model_provider")
+        )
+        resolved = new_session(
+            workspace=workspace,
+            model=model,
+            model_provider=model_provider,
+            profile=requested_profile,
+            project_id=body.get("project_id") or None,
+            eid_subject=context.subject,
+            eid_tenant=context.tenant,
+            record_id=record_id,
+            context_type="eid-record",
+        )
+        resolved.save()
+        publish_session_list_changed("eid_session_resolve")
+        return j(handler, {
+            "session": _public_eid_session_data(
+                resolved.compact() | {"messages": resolved.messages}
+            ),
+            "created": True,
+        })
 
     if parsed.path == "/api/session/new":
         try:
@@ -6294,6 +6514,13 @@ def handle_post(handler, parsed) -> bool:
         # ── Memory lifecycle: commit the previous session before starting a new one ──
         prev_session_id = body.get("prev_session_id")
         if prev_session_id:
+            if eid_context_enabled():
+                try:
+                    previous_session = get_session(prev_session_id, metadata_only=True)
+                except KeyError:
+                    return bad(handler, "Session not found", status=404)
+                if not _eid_session_access_allowed(handler, previous_session):
+                    return True
             try:
                 from api.session_lifecycle import commit_session_memory
                 from api.config import SESSION_AGENT_CACHE, SESSION_AGENT_CACHE_LOCK
@@ -6305,6 +6532,11 @@ def handle_post(handler, parsed) -> bool:
                 commit_session_memory(prev_session_id, agent=prev_agent)
             except Exception:
                 logger.debug("Lifecycle commit for prev_session %s failed", prev_session_id, exc_info=True)
+        eid_context = None
+        if eid_context_enabled():
+            eid_context, error_sent = _eid_context_or_error(handler)
+            if error_sent:
+                return True
         s = new_session(
             workspace=workspace,
             model=model,
@@ -6312,10 +6544,13 @@ def handle_post(handler, parsed) -> bool:
             profile=body.get("profile") or None,
             project_id=body.get("project_id") or None,
             worktree_info=worktree_info,
+            eid_subject=eid_context.subject if eid_context else None,
+            eid_tenant=eid_context.tenant if eid_context else None,
+            context_type="general" if eid_context else None,
         )
         if worktree_info:
             publish_session_list_changed("session_new")
-        return j(handler, {"session": s.compact() | {"messages": s.messages}})
+        return j(handler, {"session": _public_eid_session_data(s.compact() | {"messages": s.messages})})
 
     if parsed.path == "/api/session/duplicate":
         try:
@@ -6351,6 +6586,10 @@ def handle_post(handler, parsed) -> bool:
                 archived=False,
                 project_id=session.project_id,
                 profile=session.profile,
+                eid_subject=getattr(session, "eid_subject", None),
+                eid_tenant=getattr(session, "eid_tenant", None),
+                record_id=getattr(session, "record_id", None),
+                context_type=getattr(session, "context_type", None),
                 input_tokens=session.input_tokens,
                 output_tokens=session.output_tokens,
                 estimated_cost=session.estimated_cost,
@@ -6397,7 +6636,7 @@ def handle_post(handler, parsed) -> bool:
             copied_session.save()
             publish_session_list_changed("session_duplicate")
 
-            return j(handler, {"session": copied_session.compact() | {"messages": copied_session.messages}})
+            return j(handler, {"session": _public_eid_session_data(copied_session.compact() | {"messages": copied_session.messages})})
         except Exception as e:
             return bad(handler, str(e))
 
@@ -6539,7 +6778,7 @@ def handle_post(handler, parsed) -> bool:
             s.save()
         _sync_session_title_to_insights(s)
         publish_session_list_changed("session_rename")
-        return j(handler, {"session": s.compact()})
+        return j(handler, {"session": _public_eid_session_data(s.compact())})
 
 
     if parsed.path == "/api/session/title/regenerate":
@@ -6566,7 +6805,7 @@ def handle_post(handler, parsed) -> bool:
         _sync_session_title_to_insights(s)
         publish_session_list_changed("session_title_regenerate")
         return j(handler, {
-            "session": s.compact(),
+            "session": _public_eid_session_data(s.compact()),
             "title": s.title,
             "status": reason,
             "raw_preview": (raw_preview or "")[:240],
@@ -6759,7 +6998,7 @@ def handle_post(handler, parsed) -> bool:
             except Exception:
                 logger.debug("Failed to close workspace terminal after workspace update")
         set_last_workspace(new_ws)
-        return j(handler, {"session": s.compact() | {"messages": s.messages}})
+        return j(handler, {"session": _public_eid_session_data(s.compact() | {"messages": s.messages})})
     if parsed.path == "/api/session/worktree/remove":
         sid = body.get("session_id", "")
         if not sid or not isinstance(sid, str) or not sid.strip():
@@ -6861,7 +7100,7 @@ def handle_post(handler, parsed) -> bool:
         # I/O must not hold the session mutation lock.
         from api.config import _evict_session_agent
         _evict_session_agent(sid)
-        return j(handler, {"ok": True, "session": s.compact()})
+        return j(handler, {"ok": True, "session": _public_eid_session_data(s.compact())})
 
     if parsed.path == "/api/session/truncate":
         try:
@@ -6911,7 +7150,7 @@ def handle_post(handler, parsed) -> bool:
                 s.truncation_watermark or 0,
             )
         return j(
-            handler, {"ok": True, "session": s.compact() | {"messages": s.messages}}
+            handler, {"ok": True, "session": _public_eid_session_data(s.compact() | {"messages": s.messages})}
         )
 
     if parsed.path == "/api/session/branch":
@@ -7601,7 +7840,7 @@ def handle_post(handler, parsed) -> bool:
                 s.pinned = pin_requested
                 s.save()
         publish_session_list_changed("session_pin")
-        return j(handler, {"ok": True, "session": s.compact()})
+        return j(handler, {"ok": True, "session": _public_eid_session_data(s.compact())})
 
     # ── Session archive (POST) ──
     if parsed.path == "/api/session/archive":
@@ -7678,7 +7917,7 @@ def handle_post(handler, parsed) -> bool:
             s.archived = bool(body.get("archived", True))
             s.save(touch_updated_at=False)
         publish_session_list_changed("session_archive")
-        return j(handler, {"ok": True, "session": s.compact(), **_worktree_retained_payload(s)})
+        return j(handler, {"ok": True, "session": _public_eid_session_data(s.compact()), **_worktree_retained_payload(s)})
 
     # ── Session move to project (POST) ──
     if parsed.path == "/api/session/move":
@@ -7713,7 +7952,7 @@ def handle_post(handler, parsed) -> bool:
             s.project_id = target_pid
             s.save()
         publish_session_list_changed("session_move")
-        return j(handler, {"ok": True, "session": s.compact()})
+        return j(handler, {"ok": True, "session": _public_eid_session_data(s.compact())})
 
     # ── Project CRUD (POST) ──
     if parsed.path == "/api/projects/create":
@@ -8330,19 +8569,24 @@ def _handle_sessions_search(handler, parsed):
         depth = max(0, int(qs.get("depth", ["5"])[0]))
     except (ValueError, TypeError):
         depth = 5
+    session_rows, eid_error_sent = _eid_filter_session_rows(handler, all_sessions(), parsed)
+    if eid_error_sent:
+        return True
     if not q:
         safe_sessions = []
-        for s in all_sessions():
+        for s in session_rows:
             item = dict(s)
+            item = _public_eid_session_data(item)
             if isinstance(item.get("title"), str):
                 item["title"] = _redact_text(item["title"])
             safe_sessions.append(item)
         return j(handler, {"sessions": safe_sessions})
     results = []
-    for s in all_sessions():
+    for s in session_rows:
         title_match = q in (s.get("title") or "").lower()
         if title_match:
             item = dict(s, match_type="title")
+            item = _public_eid_session_data(item)
             if isinstance(item.get("title"), str):
                 item["title"] = _redact_text(item["title"])
             results.append(item)
@@ -8355,6 +8599,7 @@ def _handle_sessions_search(handler, parsed):
                     c = _session_search_message_text(m)
                     if q in str(c).lower():
                         item = dict(s, match_type="content")
+                        item = _public_eid_session_data(item)
                         preview = _session_search_preview(c, q)
                         if preview:
                             item["match_preview"] = _redact_text(preview)
@@ -10577,6 +10822,10 @@ def _handle_btw(handler, body):
         model=s.model,
         model_provider=model_provider,
         profile=getattr(s, 'profile', None),
+        eid_subject=getattr(s, 'eid_subject', None),
+        eid_tenant=getattr(s, 'eid_tenant', None),
+        record_id=getattr(s, 'record_id', None),
+        context_type=getattr(s, 'context_type', None),
     )
     # Copy conversation history for context (agent reads from messages)
     ephemeral.messages = list(s.messages or [])
@@ -10625,6 +10874,10 @@ def _handle_background(handler, body):
         model=s.model,
         model_provider=model_provider,
         profile=getattr(s, 'profile', None),
+        eid_subject=getattr(s, 'eid_subject', None),
+        eid_tenant=getattr(s, 'eid_tenant', None),
+        record_id=getattr(s, 'record_id', None),
+        context_type=getattr(s, 'context_type', None),
     )
     bg.title = f"bg: {prompt[:60]}"
     bg.save()
@@ -11180,7 +11433,13 @@ def _handle_chat_start(handler, body, diag=None):
                         provider=model_provider,
                         model=model,
                         source="webui",
-                        metadata={"route": "/api/chat/start"},
+                        metadata={
+                            "route": "/api/chat/start",
+                            "eid_subject": getattr(s, "eid_subject", None),
+                            "eid_tenant": getattr(s, "eid_tenant", None),
+                            "record_id": getattr(s, "record_id", None),
+                            "context_type": getattr(s, "context_type", None),
+                        },
                     )
                 )
             except NotImplementedError as exc:
@@ -11434,7 +11693,7 @@ def _handle_chat_sync(handler, body):
         {
             "answer": result.get("final_response") or "",
             "status": "done" if result.get("completed", True) else "partial",
-            "session": s.compact() | {"messages": s.messages},
+            "session": _public_eid_session_data(s.compact() | {"messages": s.messages}),
             "result": {k: v for k, v in result.items() if k != "messages"},
         },
     )
@@ -14111,12 +14370,14 @@ def _handle_session_import_cli(handler, body):
         return j(
             handler,
             {
-                "session": existing.compact()
-                | {
-                    "messages": existing.messages,
-                    "is_cli_session": True,
-                    "read_only": bool((cli_meta or {}).get("read_only")),
-                },
+                "session": _public_eid_session_data(
+                    existing.compact()
+                    | {
+                        "messages": existing.messages,
+                        "is_cli_session": True,
+                        "read_only": bool((cli_meta or {}).get("read_only")),
+                    }
+                ),
                 "imported": False,
             },
         )
@@ -14228,11 +14489,13 @@ def _handle_session_import_cli(handler, body):
     return j(
         handler,
         {
-            "session": s.compact()
-            | {
-                "messages": msgs,
-                "is_cli_session": True,
-            },
+            "session": _public_eid_session_data(
+                s.compact()
+                | {
+                    "messages": msgs,
+                    "is_cli_session": True,
+                }
+            ),
             "imported": True,
         },
     )
@@ -14266,7 +14529,7 @@ def _handle_session_import(handler, body):
             SESSIONS.popitem(last=False)
     s.save()
     publish_session_list_changed("session_import")
-    return j(handler, {"ok": True, "session": s.compact() | {"messages": s.messages}})
+    return j(handler, {"ok": True, "session": _public_eid_session_data(s.compact() | {"messages": s.messages})})
 
 
 # ── MCP Server helpers ──

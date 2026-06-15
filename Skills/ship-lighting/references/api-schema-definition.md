@@ -2,7 +2,7 @@
 
 来源: 用户 2026-06-04 提供（接口设计文档.docx）
 基础 URL: `http://192.168.208.23:5000/api/v1/`
-默认 record_id: `ed18461b23884c569e2366c228378825`
+`record_id` 由 Hermes 服务端的可信 EID 会话上下文注入；模型和浏览器不得提供或覆盖。
 
 > 所有端点在 api_client.py 中已封装。查询通过 `GET /canvas/all` 获取完整嵌套数据，写操作通过 POST/PUT/DELETE 端点直接执行。
 >

@@ -67,7 +67,9 @@ def test_worktree_archive_delete_api_responses_are_explicit():
     assert "def _worktree_retained_payload_for_session_id(sid: str)" in src
     assert '"worktree_retained": True' in src
     assert '{"ok": True, **worktree_retained}' in src
-    assert '{"ok": True, "session": s.compact(), **_worktree_retained_payload(s)}' in src
+    # Session payload is wrapped to strip trusted EID identity fields before
+    # leaving the server (spec 006); the retained-worktree marker is unchanged.
+    assert '{"ok": True, "session": _public_eid_session_data(s.compact()), **_worktree_retained_payload(s)}' in src
 
 
 def test_remove_worktree_ui_does_not_force_unsafe_status_by_default():

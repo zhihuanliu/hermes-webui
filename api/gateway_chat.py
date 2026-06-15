@@ -267,6 +267,8 @@ def _run_gateway_chat_streaming(
                     "session_id": session_id,
                     "profile": getattr(s, "profile", None),
                     "workspace": s.workspace if s is not None else str(workspace),
+                    "record_id": getattr(s, "record_id", None),
+                    "context_type": getattr(s, "context_type", None),
                 },
                 config_data=cfg,
             )

@@ -277,7 +277,9 @@ def test_duplicate_explicitly_persists_to_disk():
     duplicate_start = content.find('if parsed.path == "/api/session/duplicate":')
     assert duplicate_start != -1, "Duplicate endpoint not found"
     lines = content[duplicate_start:].split('\n')
-    endpoint_code = '\n'.join(lines[:80])
+    # Window widened from 80 to 90 lines: the endpoint grew when EID ownership
+    # fields were added to the copied session (spec 006).
+    endpoint_code = '\n'.join(lines[:90])
     assert 'copied_session.save()' in endpoint_code, \
         "duplicate must call .save() explicitly — without it the copy vanishes on refresh"
 

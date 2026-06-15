@@ -1899,6 +1899,7 @@ function applyBotName(){
   if(typeof fetchReasoningChip==='function') fetchReasoningChip();
   if(typeof refreshProviderQuotaIndicator==='function') refreshProviderQuotaIndicator();
   const urlSession=(typeof _sessionIdFromLocation==='function')?_sessionIdFromLocation():null;
+  const eidRecordId=String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.recordId||'').trim();
   const pwaLaunchAction=(window.HermesPWA&&typeof window.HermesPWA.launchAction==='function')
     ? window.HermesPWA.launchAction()
     : null;
@@ -1909,6 +1910,21 @@ function applyBotName(){
       S._bootReady=true;
       syncTopbar();syncWorkspacePanelState();await renderSessionList();if(typeof startGatewaySSE==='function')startGatewaySSE();return;
     }catch(e){console.warn('[pwa] new-chat launch action failed', e);}
+  }
+  if(eidRecordId){
+    try{
+      await newSession(false,{resolveRecord:true});
+      if(S.session) await _startBootModelDropdown();
+      S._bootReady=true;
+      syncTopbar();syncWorkspacePanelState();await renderSessionList();
+      if(typeof startGatewaySSE==='function')startGatewaySSE();
+      return;
+    }catch(e){
+      console.warn('[eid] record session resolution failed',e);
+      S._bootReady=true;
+      syncTopbar();syncWorkspacePanelState();
+      return;
+    }
   }
   const savedLocal=localStorage.getItem('hermes-webui-session');
   const saved=urlSession||savedLocal;

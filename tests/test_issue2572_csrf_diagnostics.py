@@ -39,7 +39,7 @@ def _json_body(handler: _FakeHandler) -> dict:
     return json.loads(handler.wfile.getvalue().decode("utf-8"))
 
 
-def test_origin_mismatch_csrf_rejection_has_diagnostic_error(monkeypatch):
+def test_origin_mismatch_csrf_rejection_has_diagnostic_error(monkeypatch, caplog):
     monkeypatch.setattr(auth, "is_auth_enabled", lambda: False)
     handler = _FakeHandler(
         {
@@ -52,6 +52,7 @@ def test_origin_mismatch_csrf_rejection_has_diagnostic_error(monkeypatch):
 
     assert handler.status == 403
     assert _json_body(handler)["error"] == "Cross-origin mismatch - check reverse proxy headers"
+    assert "rejected by CSRF guard: origin_mismatch" in caplog.text
 
 
 def test_token_mismatch_csrf_rejection_has_reload_error(monkeypatch):

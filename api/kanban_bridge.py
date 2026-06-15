@@ -13,7 +13,9 @@ Supported operations:
 
 from __future__ import annotations
 
+import contextlib
 import json
+import sys
 import time
 from dataclasses import asdict, is_dataclass
 from urllib.parse import parse_qs, unquote
@@ -24,9 +26,93 @@ BOARD_COLUMNS = ["triage", "todo", "ready", "running", "blocked", "done"]
 _TASK_PREFIX = "/api/kanban/tasks/"
 
 
+def _windows_msvcrt_lock_unreliable(path) -> bool:
+    """Return True when Windows byte-range locks fail on this path.
+
+    ``msvcrt.locking`` raises ``OSError: [Errno 36] Resource deadlock avoided``
+    (and unlock raises ``PermissionError``) on UNC paths such as
+    ``\\\\wsl.localhost\\...`` when WebUI runs on Windows but ``HERMES_HOME``
+    / kanban data lives on the WSL filesystem.
+    """
+    raw = str(path)
+    lowered = raw.lower().replace("/", "\\")
+    return (
+        lowered.startswith("\\\\")
+        or "wsl.localhost" in lowered
+        or "wsl$" in lowered
+    )
+
+
+def _patch_cross_process_init_lock(kb) -> None:
+    """Replace kanban_db init locking when Windows cannot lock the DB path."""
+    if getattr(kb, "_hermes_webui_lock_patch_applied", False):
+        return
+    kb._hermes_webui_lock_patch_applied = True
+
+    @contextlib.contextmanager
+    def _cross_process_init_lock(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32" and _windows_msvcrt_lock_unreliable(path):
+            yield
+            return
+
+        lock_path = path.with_name(path.name + ".init.lock")
+        handle = lock_path.open("a+b")
+        locked = False
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                handle.seek(0)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                    locked = True
+                except OSError:
+                    locked = False
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                locked = True
+            yield
+        finally:
+            try:
+                if locked:
+                    if sys.platform == "win32":
+                        import msvcrt
+
+                        handle.seek(0)
+                        try:
+                            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                        except (OSError, PermissionError):
+                            pass
+                    else:
+                        import fcntl
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
+
+    kb._cross_process_init_lock = _cross_process_init_lock
+
+
+def _kanban_filesystem_error_message(exc: BaseException) -> str:
+    msg = str(exc).lower()
+    if "deadlock avoided" in msg or (
+        isinstance(exc, PermissionError) and "permission denied" in msg
+    ):
+        return (
+            "kanban unavailable: cannot lock Kanban database on this filesystem "
+            "(Windows WebUI accessing WSL/UNC paths). Run WebUI inside WSL, "
+            "or set HERMES_HOME to a native Windows path."
+        )
+    return f"kanban unavailable: {exc}"
+
+
 def _kb():
     from hermes_cli import kanban_db as kb
 
+    _patch_cross_process_init_lock(kb)
     return kb
 
 
@@ -1127,6 +1213,8 @@ def handle_kanban_get(handler, parsed) -> bool | None:
         # "kanban unavailable" rather than a 500 so the frontend's existing
         # try/catch surfaces a useful toast.
         return bad(handler, f"kanban unavailable: {exc}", status=503)
+    except (OSError, PermissionError) as exc:
+        return bad(handler, _kanban_filesystem_error_message(exc), status=503)
     except LookupError as exc:
         return bad(handler, str(exc), status=404)
     except ValueError as exc:
@@ -1179,6 +1267,8 @@ def handle_kanban_post(handler, parsed, body) -> bool | None:
             return j(handler, _patch_task_payload(task_id, body, board=board)) or True
     except ImportError as exc:
         return bad(handler, f"kanban unavailable: {exc}", status=503)
+    except (OSError, PermissionError) as exc:
+        return bad(handler, _kanban_filesystem_error_message(exc), status=503)
     except LookupError as exc:
         return bad(handler, str(exc), status=404)
     except ValueError as exc:
@@ -1217,6 +1307,8 @@ def handle_kanban_patch(handler, parsed, body) -> bool | None:
             return j(handler, _patch_task_payload(task_id, body, board=board)) or True
     except ImportError as exc:
         return bad(handler, f"kanban unavailable: {exc}", status=503)
+    except (OSError, PermissionError) as exc:
+        return bad(handler, _kanban_filesystem_error_message(exc), status=503)
     except LookupError as exc:
         return bad(handler, str(exc), status=404)
     except ValueError as exc:
@@ -1246,6 +1338,8 @@ def handle_kanban_delete(handler, parsed, body) -> bool | None:
             return j(handler, _link_tasks_payload(body, unlink=True, board=board)) or True
     except ImportError as exc:
         return bad(handler, f"kanban unavailable: {exc}", status=503)
+    except (OSError, PermissionError) as exc:
+        return bad(handler, _kanban_filesystem_error_message(exc), status=503)
     except LookupError as exc:
         return bad(handler, str(exc), status=404)
     except ValueError as exc:
