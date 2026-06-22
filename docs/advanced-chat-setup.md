@@ -78,6 +78,14 @@ browser UI.
 
 The bridge is best used by operators who already run Hermes Gateway/API Server
 locally and want browser-originated chat to use the same runtime/tool path as
-messaging surfaces. Attachments, cancellation, approvals, and clarify prompts
-still follow WebUI's current compatibility path and may not match every messaging
-surface until the runtime-adapter migration is complete.
+messaging surfaces.
+
+By default, gateway-backed browser chat uses Hermes `POST /v1/runs` plus
+`GET /v1/runs/{run_id}/events` so dangerous-command **approvals** surface through
+the existing WebUI approval card and unblock via `POST /v1/runs/{run_id}/approval`.
+Set `HERMES_WEBUI_GATEWAY_TRANSPORT=completions` only when your Gateway lacks
+`/v1/runs`; that legacy transport does not emit approval SSE events, so approval
+cards will not appear during blocked tool calls.
+
+Attachments and cancellation still follow WebUI's compatibility path. Clarify
+prompt bridging depends on Gateway emitting `clarify.request` run events.

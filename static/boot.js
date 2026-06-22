@@ -1709,6 +1709,8 @@ function applyBotName(){
     window._busyInputMode=(s.busy_input_mode||'queue');
     window._sessionEndlessScrollEnabled=!!s.session_endless_scroll;
     window._botName=s.bot_name||'Hermes';
+    const _chatbotBotName=String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.botDisplayName||'').trim();
+    if(_chatbotBotName) window._botName=_chatbotBotName;
     if(s.default_model_provider) window._activeProvider=s.default_model_provider;
     if(s.default_model){
       window._defaultModel=s.default_model;
@@ -1771,9 +1773,10 @@ function applyBotName(){
     localStorage.setItem('hermes-font-size',fontSize);
     _applyFontSize(fontSize);
     if(typeof setLocale==='function'){
-      const _lang=typeof resolvePreferredLocale==='function'
+      const _forced=String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.locale||'').trim();
+      const _lang=_forced||(typeof resolvePreferredLocale==='function'
         ? resolvePreferredLocale(s.language, localStorage.getItem('hermes-lang'))
-        : (s.language || localStorage.getItem('hermes-lang') || 'en');
+        : (s.language || localStorage.getItem('hermes-lang') || 'en'));
       setLocale(_lang);
       if(typeof applyLocaleToDOM==='function')applyLocaleToDOM();
     }
@@ -1802,9 +1805,10 @@ function applyBotName(){
     window._botName='Hermes';
     _bootSettings={check_for_updates:false};
     if(typeof setLocale==='function'){
-      const _lang=typeof resolvePreferredLocale==='function'
+      const _forced=String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.locale||'').trim();
+      const _lang=_forced||(typeof resolvePreferredLocale==='function'
         ? resolvePreferredLocale(null, localStorage.getItem('hermes-lang'))
-        : (localStorage.getItem('hermes-lang') || 'en');
+        : (localStorage.getItem('hermes-lang') || 'en'));
       setLocale(_lang);
       if(typeof applyLocaleToDOM==='function')applyLocaleToDOM();
     }
@@ -1876,6 +1880,25 @@ function applyBotName(){
   setTimeout(()=>{
     try{Promise.resolve(_startBootModelDropdown()).catch(()=>{});}catch(_){}
   },0);
+  const chatbotContext=window.__HERMES_CHATBOT_CONTEXT__||null;
+  const eidRecordId=String(chatbotContext&&chatbotContext.recordId||'').trim();
+  const invalidEidRecordId=String(chatbotContext&&chatbotContext.invalidRecordId||'').trim();
+  const missingChatbotRecord=!!(chatbotContext&&chatbotContext.recordRequired&&!eidRecordId&&!invalidEidRecordId);
+  if(invalidEidRecordId||missingChatbotRecord){
+    if(invalidEidRecordId){
+      console.warn('[eid] invalid record_id in iframe URL:', invalidEidRecordId);
+    }else{
+      console.warn('[eid] missing record_id in chatbot URL');
+    }
+    if(typeof window.showChatbotRecordRequirement==='function'){
+      window.showChatbotRecordRequirement(invalidEidRecordId?'invalid':'missing');
+    }else if(typeof showToast==='function'){
+      showToast(invalidEidRecordId?'record_id 格式无效，无法加载助手会话。':'缺少 record_id，无法加载助手会话。',5000);
+    }
+    S.session=null;S.messages=[];S.activeStreamId=null;S.busy=false;S._bootReady=true;
+    syncTopbar();syncWorkspacePanelState();
+    return;
+  }
   // Start independent boot fetches without holding the conversation list behind
   // them. The sidebar can render from /api/sessions while workspace/onboarding
   // metadata settles in parallel.
@@ -1899,7 +1922,6 @@ function applyBotName(){
   if(typeof fetchReasoningChip==='function') fetchReasoningChip();
   if(typeof refreshProviderQuotaIndicator==='function') refreshProviderQuotaIndicator();
   const urlSession=(typeof _sessionIdFromLocation==='function')?_sessionIdFromLocation():null;
-  const eidRecordId=String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.recordId||'').trim();
   const pwaLaunchAction=(window.HermesPWA&&typeof window.HermesPWA.launchAction==='function')
     ? window.HermesPWA.launchAction()
     : null;

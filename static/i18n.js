@@ -7828,6 +7828,7 @@ const LOCALES = {
     // messages.js
     edit_message: '编辑消息',
     regenerate: '重新生成回复',
+    undo_exchange: '撤销上一条问答',
     copy: '复制',
     copied: '已复制',
     copy_failed: '复制失败',

@@ -105,9 +105,14 @@ if (-not $AgentDir) {
     # Build candidate list incrementally — ${env:ProgramFiles(x86)} is null on
     # 32-bit Windows and in some constrained environments, and Join-Path throws
     # on a null Path. Skip any system-wide root that isn't set so the launcher
-    # stays robust across Windows variants. USERPROFILE is always set so it
-    # stays unguarded; the dev-checkout sibling is path-derived, not env-based.
+    # stays robust across Windows variants. HERMES_HOME may point at a WSL UNC
+    # path (for example \\wsl.localhost\Ubuntu\home\me\.hermes), so prefer it
+    # when explicitly set. USERPROFILE is always set so it stays unguarded; the
+    # dev-checkout sibling is path-derived, not env-based.
     $candidates = @()
+    if ($env:HERMES_HOME) {
+        $candidates += (Join-Path $env:HERMES_HOME 'hermes-agent')
+    }
     $candidates += (Join-Path $env:USERPROFILE '.hermes\hermes-agent')
     foreach ($root in @($env:LOCALAPPDATA, ${env:ProgramW6432}, ${env:ProgramFiles}, ${env:ProgramFiles(x86)})) {
         if ($root) { $candidates += (Join-Path $root 'hermes\hermes-agent') }

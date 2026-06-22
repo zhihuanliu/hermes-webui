@@ -120,20 +120,22 @@ Work through sections in order. Each section builds on the previous.
 
 ### EID embedded record-session checks
 
-SETUP: use isolated state and enable EID development mode with a fixed subject.
+SETUP: use isolated state and enable record-only embedded chat with
+`HERMES_WEBUI_EID_RECORD_CONTEXT=1`.
 
 1. Open `/chatbot?record_id=record-a`, send a message, then open `record-b`.
 2. Return to `record-a`; expect its original conversation to be restored.
-3. Open `/chatbot` without `record_id`; expect ordinary chat and no fixed record fallback.
+3. Open `/chatbot` without `record_id`; expect a polished in-page prompt that
+   says `record_id` is required, with the composer and new-chat controls disabled.
 4. Restart WebUI and reopen `record-a`; expect the persisted record session to resolve.
-5. In trusted-proxy mode, omit the identity header or authorization URL; expect `401`
-   or `503`, with no record session created.
-6. Send the same `record_id` under two subjects; expect distinct session IDs and lists.
+5. Open `/chatbot?record_id=../bad`; expect the same blocked state with an
+   invalid-format message and no session-list request.
+6. Confirm ordinary WebUI `/` still supports normal non-record chats.
 
 Automated focus:
 
 ```bash
-pytest -q tests/test_eid_business_context.py
+pytest -q tests/test_eid_business_context.py tests/test_chatbot_startup_loading.py
 ```
 
 ### T1.1: Fresh Load Shows Empty State

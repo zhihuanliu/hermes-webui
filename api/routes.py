@@ -37,81 +37,61 @@ from api.session_events import (
     subscribe_session_events,
     unsubscribe_session_events,
 )
-from api.eid_context import (
-    EidContextError,
-    authorize_record_access,
-    eid_context_enabled,
+from api.eid_record_context import (
+    EidRecordContextError,
+    eid_record_context_enabled,
     session_matches_record,
-    session_owned_by_context,
-    trusted_eid_context,
     validate_record_id,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _eid_context_or_error(handler):
+def _eid_request_record_id(handler, parsed, *, required=False):
     try:
-        return trusted_eid_context(handler), False
-    except EidContextError as exc:
+        query = parse_qs(parsed.query)
+        return validate_record_id(query.get("record_id", [""])[0], required=required), False
+    except EidRecordContextError as exc:
         bad(handler, str(exc), status=exc.status)
         return None, True
 
 
-def _eid_session_access_allowed(handler, session) -> bool:
-    if not eid_context_enabled():
+def _record_id_from_request_body_or_query(body, parsed):
+    """Resolve record_id from JSON body, falling back to query string."""
+    raw = body.get("record_id")
+    if raw is None or str(raw).strip() == "":
+        query = parse_qs(parsed.query)
+        raw = query.get("record_id", [""])[0]
+    return validate_record_id(raw)
+
+
+def _eid_session_access_allowed(handler, session, requested_record=None) -> bool:
+    if not eid_record_context_enabled():
         return True
-    context, error_sent = _eid_context_or_error(handler)
-    if error_sent:
-        return False
-    if context is None or not session_owned_by_context(session, context):
+    if requested_record and not session_matches_record(session, requested_record):
         bad(handler, "Session not found", status=404)
         return False
-    record_id = getattr(session, "record_id", None)
-    if record_id:
-        try:
-            authorize_record_access(context, record_id)
-        except EidContextError as exc:
-            bad(handler, str(exc), status=exc.status)
-            return False
     return True
 
 
 def _eid_filter_session_rows(handler, rows, parsed):
-    if not eid_context_enabled():
+    if not eid_record_context_enabled():
         return rows, None
-    context, error_sent = _eid_context_or_error(handler)
+    requested_record, error_sent = _eid_request_record_id(handler, parsed, required=True)
     if error_sent:
         return None, True
-    try:
-        query = parse_qs(parsed.query)
-        requested_record = validate_record_id(query.get("record_id", [""])[0], required=False)
-    except EidContextError as exc:
-        bad(handler, str(exc), status=exc.status)
-        return None, True
-    scoped = [row for row in rows if context is not None and session_owned_by_context(row, context)]
-    if requested_record:
-        try:
-            authorize_record_access(context, requested_record)
-        except EidContextError as exc:
-            bad(handler, str(exc), status=exc.status)
-            return None, True
-        scoped = [row for row in scoped if session_matches_record(row, requested_record)]
-    else:
-        scoped = [row for row in scoped if session_matches_record(row, None)]
+    scoped = [row for row in rows if session_matches_record(row, requested_record)]
     return scoped, False
 
 
 def _public_eid_session_data(payload):
-    """Remove trusted identity fields before returning session data to browsers."""
+    """Return a browser-safe copy of record-scoped session data."""
     public = dict(payload)
-    public.pop("eid_subject", None)
-    public.pop("eid_tenant", None)
     return public
 
 
 def _eid_stream_access_allowed(handler, stream_id: str) -> bool:
-    if not eid_context_enabled():
+    if not eid_record_context_enabled():
         return True
     session_id = ""
     try:
@@ -2995,7 +2975,12 @@ from api.streaming import (
     _materialize_pending_user_turn_before_error,
     generate_session_title_for_session,
 )
-from api.gateway_chat import _run_gateway_chat_streaming, webui_gateway_chat_enabled
+from api.gateway_chat import (
+    _run_gateway_chat_streaming,
+    forward_gateway_approval_response,
+    gateway_session_has_active_run,
+    webui_gateway_chat_enabled,
+)
 from api.run_journal import (
     find_run_summary,
     read_run_events,
@@ -4764,14 +4749,18 @@ def _serve_manifest(handler) -> bool:
 def handle_get(handler, parsed) -> bool:
     """Handle all GET routes. Returns True if handled, False for 404."""
 
-    if eid_context_enabled() and parsed.path.startswith("/api/"):
-        guarded_sid = parse_qs(parsed.query).get("session_id", [""])[0]
+    if eid_record_context_enabled() and parsed.path.startswith("/api/"):
+        query = parse_qs(parsed.query)
+        guarded_sid = query.get("session_id", [""])[0]
         if guarded_sid:
             try:
                 guarded_session = get_session(guarded_sid, metadata_only=True)
             except KeyError:
                 return bad(handler, "Session not found", status=404)
-            if not _eid_session_access_allowed(handler, guarded_session):
+            requested_record, error_sent = _eid_request_record_id(handler, parsed, required=False)
+            if error_sent:
+                return True
+            if not _eid_session_access_allowed(handler, guarded_session, requested_record):
                 return True
 
     if parsed.path.startswith("/session/static/"):
@@ -6365,7 +6354,7 @@ def handle_post(handler, parsed) -> bool:
         raise
 
     if (
-        eid_context_enabled()
+        eid_record_context_enabled()
         and parsed.path not in {
             "/api/session/new",
             "/api/session/resolve",
@@ -6380,7 +6369,10 @@ def handle_post(handler, parsed) -> bool:
                 requested_session = get_session(requested_sid, metadata_only=True)
             except KeyError:
                 return bad(handler, "Session not found", status=404)
-            if not _eid_session_access_allowed(handler, requested_session):
+            requested_record, error_sent = _eid_request_record_id(handler, parsed, required=False)
+            if error_sent:
+                return True
+            if not _eid_session_access_allowed(handler, requested_session, requested_record):
                 return True
 
     if parsed.path == "/api/session/recovery/repair-safe":
@@ -6408,27 +6400,17 @@ def handle_post(handler, parsed) -> bool:
         return True
 
     if parsed.path == "/api/session/resolve":
-        context, error_sent = _eid_context_or_error(handler)
-        if error_sent:
-            return True
-        if context is None:
-            return bad(handler, "EID context is not enabled", status=409)
+        if not eid_record_context_enabled():
+            return bad(handler, "EID record context is not enabled", status=409)
         try:
-            record_id = validate_record_id(body.get("record_id"))
-            authorize_record_access(context, record_id or "")
-        except EidContextError as exc:
-            logger.warning(
-                "EID session resolve rejected: %s status=%s",
-                type(exc).__name__,
-                exc.status,
-            )
+            record_id = _record_id_from_request_body_or_query(body, parsed)
+        except EidRecordContextError as exc:
             return bad(handler, str(exc), status=exc.status)
 
         requested_profile = body.get("profile") or None
         candidates = [
             row for row in all_sessions()
-            if session_owned_by_context(row, context)
-            and session_matches_record(row, record_id)
+            if session_matches_record(row, record_id)
             and _profiles_match(row.get("profile"), requested_profile or row.get("profile"))
             and not row.get("archived")
         ]
@@ -6468,8 +6450,6 @@ def handle_post(handler, parsed) -> bool:
             model_provider=model_provider,
             profile=requested_profile,
             project_id=body.get("project_id") or None,
-            eid_subject=context.subject,
-            eid_tenant=context.tenant,
             record_id=record_id,
             context_type="eid-record",
         )
@@ -6514,12 +6494,16 @@ def handle_post(handler, parsed) -> bool:
         # ── Memory lifecycle: commit the previous session before starting a new one ──
         prev_session_id = body.get("prev_session_id")
         if prev_session_id:
-            if eid_context_enabled():
+            if eid_record_context_enabled():
                 try:
                     previous_session = get_session(prev_session_id, metadata_only=True)
                 except KeyError:
                     return bad(handler, "Session not found", status=404)
-                if not _eid_session_access_allowed(handler, previous_session):
+                try:
+                    requested_record = validate_record_id(body.get("record_id"), required=False)
+                except EidRecordContextError as exc:
+                    return bad(handler, str(exc), status=exc.status)
+                if not _eid_session_access_allowed(handler, previous_session, requested_record):
                     return True
             try:
                 from api.session_lifecycle import commit_session_memory
@@ -6532,11 +6516,12 @@ def handle_post(handler, parsed) -> bool:
                 commit_session_memory(prev_session_id, agent=prev_agent)
             except Exception:
                 logger.debug("Lifecycle commit for prev_session %s failed", prev_session_id, exc_info=True)
-        eid_context = None
-        if eid_context_enabled():
-            eid_context, error_sent = _eid_context_or_error(handler)
-            if error_sent:
-                return True
+        record_id = None
+        if eid_record_context_enabled():
+            try:
+                record_id = validate_record_id(body.get("record_id"), required=False)
+            except EidRecordContextError as exc:
+                return bad(handler, str(exc), status=exc.status)
         s = new_session(
             workspace=workspace,
             model=model,
@@ -6544,9 +6529,8 @@ def handle_post(handler, parsed) -> bool:
             profile=body.get("profile") or None,
             project_id=body.get("project_id") or None,
             worktree_info=worktree_info,
-            eid_subject=eid_context.subject if eid_context else None,
-            eid_tenant=eid_context.tenant if eid_context else None,
-            context_type="general" if eid_context else None,
+            record_id=record_id,
+            context_type="eid-record" if record_id else None,
         )
         if worktree_info:
             publish_session_list_changed("session_new")
@@ -6586,8 +6570,6 @@ def handle_post(handler, parsed) -> bool:
                 archived=False,
                 project_id=session.project_id,
                 profile=session.profile,
-                eid_subject=getattr(session, "eid_subject", None),
-                eid_tenant=getattr(session, "eid_tenant", None),
                 record_id=getattr(session, "record_id", None),
                 context_type=getattr(session, "context_type", None),
                 input_tokens=session.input_tokens,
@@ -10822,8 +10804,6 @@ def _handle_btw(handler, body):
         model=s.model,
         model_provider=model_provider,
         profile=getattr(s, 'profile', None),
-        eid_subject=getattr(s, 'eid_subject', None),
-        eid_tenant=getattr(s, 'eid_tenant', None),
         record_id=getattr(s, 'record_id', None),
         context_type=getattr(s, 'context_type', None),
     )
@@ -10874,8 +10854,6 @@ def _handle_background(handler, body):
         model=s.model,
         model_provider=model_provider,
         profile=getattr(s, 'profile', None),
-        eid_subject=getattr(s, 'eid_subject', None),
-        eid_tenant=getattr(s, 'eid_tenant', None),
         record_id=getattr(s, 'record_id', None),
         context_type=getattr(s, 'context_type', None),
     )
@@ -11435,8 +11413,6 @@ def _handle_chat_start(handler, body, diag=None):
                         source="webui",
                         metadata={
                             "route": "/api/chat/start",
-                            "eid_subject": getattr(s, "eid_subject", None),
-                            "eid_tenant": getattr(s, "eid_tenant", None),
                             "record_id": getattr(s, "record_id", None),
                             "context_type": getattr(s, "context_type", None),
                         },
@@ -12875,11 +12851,17 @@ def _resolve_approval_legacy(sid: str, approval_id: str, choice: str) -> bool:
     # This is the primary signal when streaming is active — the agent
     # thread is parked in entry.event.wait() and needs to be woken up.
     gateway_resolved = 0
-    if found_target or not approval_id:
-        gateway_resolved = resolve_gateway_approval(sid, choice, resolve_all=False) or 0
-    # Keep the historical no-id response path truthy for old clients/tests while
-    # making stale explicit ids bounded as not-active for Slice 3b.
-    resolved = bool(pending) or bool(gateway_resolved) or not bool(approval_id)
+    remote_gateway_resolved = False
+    if webui_gateway_chat_enabled() and gateway_session_has_active_run(sid):
+        if found_target or not approval_id:
+            remote_gateway_resolved = forward_gateway_approval_response(sid, choice)
+        resolved = bool(pending) or remote_gateway_resolved
+        if approval_id and not found_target:
+            resolved = False
+    else:
+        if found_target or not approval_id:
+            gateway_resolved = resolve_gateway_approval(sid, choice, resolve_all=False) or 0
+        resolved = bool(pending) or bool(gateway_resolved) or not bool(approval_id)
     if resolved:
         publish_session_list_changed("attention_resolved")
     return resolved

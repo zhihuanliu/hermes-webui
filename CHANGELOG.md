@@ -4,11 +4,14 @@
 ## [Unreleased]
 
 ### Fixed
+- Embedded chatbot iframes now show a startup loading indicator instead of a blank chat pane while the saved conversation or record-scoped empty state is being resolved.
+- Gateway-backed browser chat now bridges Hermes run SSE `approval.request` events into WebUI's existing approval card, `/api/approval/pending`, and `/api/approval/stream`, and forwards `/api/approval/respond` to `POST /v1/runs/{run_id}/approval` on the remote Gateway so embedded EID iframe chat can unblock `execute_code` and other gated tools.
 - Kanban board loads on Windows when `HERMES_HOME` / kanban data lives on a WSL UNC path (`\\wsl.localhost\...`). Windows `msvcrt` byte-range locks fail on those paths with `Resource deadlock avoided`; the WebUI bridge now skips the init lock there and returns a clear 503 if filesystem locking still fails.
 
 ### Changed
+- Simplified EID embedding to a record-only mode. `HERMES_WEBUI_EID_RECORD_CONTEXT=1` now creates, restores, filters, and runs conversations by `record_id` without EID login, proxy identity headers, delegation tokens, or a remote authorization endpoint. Embedded API requests carry the active record automatically, and ship-lighting tools consume only the server-bound `HERMES_EID_RECORD_ID`.
+- Removed the old Session `eid_subject` / `eid_tenant` fields from runtime persistence and browser-facing session payloads; legacy files that still contain those keys are tolerated on load and cleaned up on subsequent saves.
 - Allowed Hermes WebUI to be embedded by the local development host app at `http://localhost:5174` using enforced CSP `frame-ancestors 'self' http://localhost:5174`, with `X-Frame-Options: ALLOW-FROM http://localhost:5174` as the legacy-browser fallback.
-- Added a default-off EID embedded-chat boundary: trusted proxy/development identities, fail-closed record authorization, `(subject, tenant, record, profile)` session ownership, record create/restore via `/api/session/resolve`, record-scoped chatbot lists, and non-persisted Agent/Gateway record context. EID sessions ignore profile-level `SHIP_LIGHTING_RECORD_ID` defaults. Successful record authorizations are cached in-process for `HERMES_WEBUI_EID_AUTHORIZE_CACHE_TTL` seconds (denials never cached) so per-request guards do not flood the EID backend, and trusted identity fields (`eid_subject`/`eid_tenant`) are stripped from every browser-facing session payload, including SSE `done` events.
 - Fixed EID embedded session creation behind multi-hop reverse proxies by parsing comma-separated forwarded-host chains during CSRF same-origin checks. CSRF and EID authorization 403s now log a safe rejection category without identities, record IDs, or tokens.
 
 ### Docs

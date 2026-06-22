@@ -540,6 +540,12 @@ function _setNewSessionPending(pending){
 }
 
 async function newSession(flash, options={}){
+  if(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.recordBlocked){
+    if(typeof window.showChatbotRecordRequirement==='function'){
+      window.showChatbotRecordRequirement(window.__HERMES_CHATBOT_CONTEXT__.invalidRecordId?'invalid':'missing');
+    }
+    return null;
+  }
   if(_newSessionInFlight){
     if(typeof showToast==='function') showToast(_newSessionPendingText(),1500);
     return _newSessionInFlight;
@@ -2851,6 +2857,7 @@ function _mergeRenderSessionListOptions(prev, next){
 }
 
 async function _runRenderSessionListRefresh(opts, _gen){
+  if(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.recordBlocked) return;
   const deferWhileInteracting=Boolean(opts&&opts.deferWhileInteracting);
   if(!deferWhileInteracting) _pendingSessionListPayload=null;
   try{

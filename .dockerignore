@@ -5,3 +5,16 @@ __pycache__
 *.pyo
 tests/
 .env*
+
+# 运行时不需要的大体积文档/媒体
+docs/pr-media/
+docs/ui-ux/
+specs/
+.lean-spec/
+.pytest_cache/
+.tmp-pytest/
+*.tar
+*.zip
+Skills/
+*.tar
+*.md

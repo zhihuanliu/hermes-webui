@@ -246,6 +246,11 @@ if [ "A${whoami}" == "Aroot" ]; then
   mkdir -p "${UV_CACHE_DIR}" || error_exit "Failed to create ${UV_CACHE_DIR} directory"
   chown hermeswebui:hermeswebui "${UV_CACHE_DIR}" || error_exit "Failed to set owner of ${UV_CACHE_DIR} to hermeswebui user"
 
+  # Compose may mount a named volume at /app/venv for venv persistence.
+  # Fresh Docker volumes are root-owned; align before dropping to hermeswebui.
+  mkdir -p /app/venv
+  chown -R "${WANTED_UID}:${WANTED_GID}" /app/venv || error_exit "Failed to set owner of /app/venv"
+
   chown -R "${WANTED_UID}:${WANTED_GID}" "$itdir" || error_exit "Failed to set owner of $itdir"
   # Issue #2010 — Railway / user-namespaced runtimes: in-container UID 0 may map
   # to a host UID outside the writable subuid range, so /tmp writes fail despite

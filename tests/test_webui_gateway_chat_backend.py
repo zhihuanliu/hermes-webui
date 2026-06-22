@@ -12,11 +12,15 @@ import api.streaming as streaming
 from api.config import STREAMS, create_stream_channel
 from api.models import new_session
 from api.gateway_chat import (
+    _gateway_approval_payload,
     _gateway_http_error_event,
+    _gateway_run_event,
     _gateway_sse_delta,
     _gateway_stream_usage,
     _gateway_tool_progress_event,
+    forward_gateway_approval_response,
     gateway_chat_config_status,
+    register_gateway_session_run,
     webui_chat_backend_mode,
     webui_gateway_chat_enabled,
 )
@@ -247,6 +251,7 @@ def test_gateway_chat_worker_translates_sse_and_persists_session(tmp_path, monke
 
     monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
     monkeypatch.setenv("HERMES_WEBUI_GATEWAY_API_KEY", "secret-token")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_TRANSPORT", "completions")
     monkeypatch.setattr(streaming, "_load_webui_prefill_context", lambda cfg: {
         "status": "loaded",
         "source": "test",
@@ -292,6 +297,7 @@ def test_gateway_chat_worker_translates_sse_and_persists_session(tmp_path, monke
     assert captured["headers"]["Authorization"] == "Bearer secret-token"
     assert captured["headers"]["X-hermes-session-id"] == s.session_id
     assert captured["headers"]["X-hermes-session-key"] == f"webui:{s.session_id}"
+    assert "X-eid-record-id" not in {k.lower(): v for k, v in captured["headers"].items()}
     assert '"stream": true' in captured["body"]
     payload = json.loads(captured["body"])
     # #3324: the gateway path's first system message is now the full WebUI
@@ -333,6 +339,70 @@ def test_gateway_chat_worker_translates_sse_and_persists_session(tmp_path, monke
     }) in events
 
 
+def test_gateway_chat_forwards_eid_record_header_for_record_scoped_session(tmp_path, monkeypatch):
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+    monkeypatch.setattr(models, "SESSION_DIR", session_dir)
+    monkeypatch.setattr(models, "SESSION_INDEX_FILE", session_dir / "_index.json")
+    monkeypatch.setattr(models, "SESSIONS", OrderedDict())
+
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
+            yield b'data: [DONE]\n\n'
+
+    def fake_urlopen(req, timeout=0):
+        captured["headers"] = {k.lower(): v for k, v in dict(req.header_items()).items()}
+        captured["body"] = req.data.decode("utf-8")
+        return FakeResponse()
+
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_API_KEY", "secret-token")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_TRANSPORT", "completions")
+    monkeypatch.setattr(streaming, "_load_webui_prefill_context", lambda cfg: {
+        "status": "loaded",
+        "source": "test",
+        "label": "test",
+        "message_count": 0,
+        "messages": [],
+    })
+    monkeypatch.setattr(streaming, "_prefill_messages_with_webui_context", lambda ctx, cfg: [])
+    monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", fake_urlopen)
+
+    s = new_session(record_id="record-a", context_type="eid-record")
+    stream_id = "stream-gateway-eid-record"
+    s.active_stream_id = stream_id
+    s.pending_user_message = "ping"
+    s.pending_attachments = []
+    s.pending_started_at = 123
+    s.save()
+    channel = create_stream_channel()
+    STREAMS[stream_id] = channel
+
+    gateway_chat._run_gateway_chat_streaming(
+        s.session_id,
+        "ping",
+        "test-model",
+        str(tmp_path),
+        stream_id,
+        [],
+    )
+
+    assert captured["headers"]["x-eid-record-id"] == "record-a"
+    assert "x-eid-subject" not in captured["headers"]
+    assert "x-eid-tenant" not in captured["headers"]
+    assert "x-eid-delegation" not in captured["headers"]
+    assert '"stream": true' in captured["body"]
+
+
 def test_gateway_chat_worker_normalizes_prefill_slice_before_system_prefix(tmp_path, monkeypatch):
     session_dir = tmp_path / "sessions"
     session_dir.mkdir()
@@ -370,6 +440,7 @@ def test_gateway_chat_worker_normalizes_prefill_slice_before_system_prefix(tmp_p
         return original_normalizer(messages)
 
     monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_TRANSPORT", "completions")
     monkeypatch.setattr(streaming, "_load_webui_prefill_context", lambda cfg: {
         "status": "loaded",
         "source": "test",
@@ -423,6 +494,7 @@ def test_gateway_chat_worker_backfills_context_only_turns_into_display(tmp_path,
             yield b'data: [DONE]\n\n'
 
     monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_TRANSPORT", "completions")
     monkeypatch.setattr(streaming, "_load_webui_prefill_context", lambda cfg: {"status": "not_configured", "source": "none", "label": "", "message_count": 0, "messages": []})
     monkeypatch.setattr(streaming, "_prefill_messages_with_webui_context", lambda ctx, cfg: [])
     monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", lambda req, timeout=0: FakeResponse())
@@ -486,6 +558,7 @@ def test_gateway_chat_worker_preserves_old_visible_turns_when_context_is_compact
             yield b'data: [DONE]\n\n'
 
     monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_TRANSPORT", "completions")
     monkeypatch.setattr(streaming, "_load_webui_prefill_context", lambda cfg: {"status": "not_configured", "source": "none", "label": "", "message_count": 0, "messages": []})
     monkeypatch.setattr(streaming, "_prefill_messages_with_webui_context", lambda ctx, cfg: [])
     monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", lambda req, timeout=0: FakeResponse())
@@ -564,6 +637,7 @@ def test_gateway_chat_worker_keeps_repeated_identical_visible_turns(tmp_path, mo
             yield b'data: [DONE]\n\n'
 
     monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_TRANSPORT", "completions")
     monkeypatch.setattr(streaming, "_load_webui_prefill_context", lambda cfg: {"status": "not_configured", "source": "none", "label": "", "message_count": 0, "messages": []})
     monkeypatch.setattr(streaming, "_prefill_messages_with_webui_context", lambda ctx, cfg: [])
     monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", lambda req, timeout=0: FakeResponse())
@@ -642,6 +716,7 @@ def test_gateway_chat_worker_forwards_image_attachments_as_multimodal_parts(tmp_
         return FakeResponse()
 
     monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_TRANSPORT", "completions")
     monkeypatch.setattr(streaming, "_load_webui_prefill_context", lambda cfg: {"status": "not_configured", "source": "none", "label": "", "message_count": 0, "messages": []})
     monkeypatch.setattr(streaming, "_prefill_messages_with_webui_context", lambda ctx, cfg: [{"role": "user", "content": "webui session context"}])
     monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", fake_urlopen)
@@ -670,3 +745,133 @@ def test_gateway_chat_worker_forwards_image_attachments_as_multimodal_parts(tmp_
     assert content[0] == {"type": "text", "text": "What is in this image?"}
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_gateway_approval_payload_normalizes_run_event_fixture():
+    payload = {
+        "event": "approval.request",
+        "run_id": "run_test123",
+        "command": "python -c 'print(1)'",
+        "description": "Execute Python code",
+        "pattern_key": "execute_code",
+        "pattern_keys": ["execute_code"],
+        "choices": ["once", "session", "always", "deny"],
+    }
+    normalized = _gateway_approval_payload(payload)
+    assert normalized["command"] == "python -c 'print(1)'"
+    assert normalized["description"] == "Execute Python code"
+    assert normalized["pattern_key"] == "execute_code"
+    assert normalized["pattern_keys"] == ["execute_code"]
+
+
+def test_gateway_run_event_translates_approval_request_marker():
+    assert _gateway_run_event({"event": "approval.request", "command": "rm -rf /tmp/x"}) == (
+        "__approval__",
+        {"event": "approval.request", "command": "rm -rf /tmp/x"},
+    )
+
+
+def test_gateway_run_sse_forwards_approval_to_webui_stream(tmp_path, monkeypatch):
+    session_dir = tmp_path / "sessions"
+    session_dir.mkdir()
+    monkeypatch.setattr(models, "SESSION_DIR", session_dir)
+    monkeypatch.setattr(models, "SESSION_INDEX_FILE", session_dir / "_index.json")
+    monkeypatch.setattr(models, "SESSIONS", OrderedDict())
+
+    captured = {}
+
+    class FakeStartResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"run_id":"run-approval-test","status":"started"}'
+
+    class FakeEventsResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            yield b'data: {"event":"message.delta","delta":"Thinking"}\n\n'
+            yield b'data: {"event":"approval.request","run_id":"run-approval-test","command":"python -c \'1\'","description":"Run code","pattern_key":"execute_code","pattern_keys":["execute_code"]}\n\n'
+            yield b'data: {"event":"message.delta","delta":" done"}\n\n'
+            yield b'data: {"event":"run.completed","output":"Thinking done","usage":{"input_tokens":3,"output_tokens":2}}\n\n'
+            yield b': stream closed\n\n'
+
+    def fake_urlopen(req, timeout=0):
+        captured["url"] = req.full_url
+        if req.full_url.endswith("/v1/runs"):
+            captured["start_body"] = json.loads(req.data.decode("utf-8"))
+            return FakeStartResponse()
+        return FakeEventsResponse()
+
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_API_KEY", "secret-token")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_TRANSPORT", "runs")
+    monkeypatch.setattr(streaming, "_load_webui_prefill_context", lambda cfg: {"status": "not_configured", "source": "none", "label": "", "message_count": 0, "messages": []})
+    monkeypatch.setattr(streaming, "_prefill_messages_with_webui_context", lambda ctx, cfg: [])
+    monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", fake_urlopen)
+
+    s = new_session()
+    stream_id = "stream-gateway-approval-test"
+    s.active_stream_id = stream_id
+    s.pending_user_message = "run code"
+    s.save()
+    channel = create_stream_channel()
+    subscriber = channel.subscribe()
+    STREAMS[stream_id] = channel
+
+    gateway_chat._run_gateway_chat_streaming(
+        s.session_id,
+        "run code",
+        "test-model",
+        str(tmp_path),
+        stream_id,
+        [],
+    )
+
+    events = []
+    while not subscriber.empty():
+        events.append(subscriber.get_nowait())
+    approval_events = [evt for evt in events if evt[0] == "approval"]
+    assert len(approval_events) == 1
+    assert approval_events[0][1]["command"] == "python -c '1'"
+    assert approval_events[0][1].get("approval_id")
+    assert captured["url"].endswith("/v1/runs/run-approval-test/events")
+    assert captured["start_body"]["session_id"] == s.session_id
+
+
+def test_forward_gateway_approval_response_posts_to_remote_run(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"object":"hermes.run.approval_response","run_id":"run-approval-test","choice":"once","resolved":1}'
+
+        status = 200
+
+    def fake_urlopen(req, timeout=0):
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_API_KEY", "secret-token")
+    monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", fake_urlopen)
+    register_gateway_session_run("sess-1", run_id="run-approval-test", stream_id="stream-1")
+
+    assert forward_gateway_approval_response("sess-1", "once") is True
+    assert captured["url"] == "http://gateway.local/v1/runs/run-approval-test/approval"
+    assert captured["body"] == {"choice": "once"}

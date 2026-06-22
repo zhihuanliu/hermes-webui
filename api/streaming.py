@@ -298,7 +298,7 @@ def _webui_surface_context_prompt(surface_context: Optional[dict]) -> str:
         ("session_id", "Session ID"),
         ("profile", "Profile"),
         ("workspace", "Workspace"),
-        ("record_id", "Authorized EID record ID"),
+        ("record_id", "Current EID record ID"),
         ("context_type", "Business context type"),
     )
     for key, label in fields:
@@ -1150,8 +1150,7 @@ def _extract_gateway_routing_metadata(agent, result, requested_model=None, reque
 
 
 def _build_agent_thread_env(profile_runtime_env: dict | None, workspace: str, session_id: str,
-                            profile_home: str, eid_subject: str | None = None,
-                            record_id: str | None = None) -> dict:
+                            profile_home: str, record_id: str | None = None) -> dict:
     """Build thread-local agent env with per-run values overriding profile defaults.
 
     Profile runtime env may include TERMINAL_CWD from config.yaml. Passing it as
@@ -1167,8 +1166,6 @@ def _build_agent_thread_env(profile_runtime_env: dict | None, workspace: str, se
         'HERMES_SESSION_PLATFORM': 'webui',
         'HERMES_HOME': profile_home,
     })
-    if eid_subject:
-        env['HERMES_EID_SUBJECT'] = str(eid_subject)
     if record_id:
         env['HERMES_EID_RECORD_ID'] = str(record_id)
     return env
@@ -4302,6 +4299,7 @@ def _run_agent_streaming(
     old_session_id = None
     old_session_platform = None
     old_hermes_home = None
+    old_eid_record_id = None
     old_profile_env = {}
 
     # MCP discovery moved to AFTER the per-profile HERMES_HOME mutation below
@@ -4627,9 +4625,9 @@ def _run_agent_streaming(
             _profile_home = os.environ.get('HERMES_HOME', '')
             _profile_runtime_env = {}
             patch_skill_home_modules = None
-        if getattr(s, 'eid_subject', None):
-            # A profile-level fixed record is unsafe for dynamic, user-scoped EID
-            # sessions. Keep it out of both thread and process fallback envs.
+        if getattr(s, 'record_id', None):
+            # The iframe record is dynamic per session, so a profile-level fixed
+            # record must not override it.
             _profile_runtime_env.pop('SHIP_LIGHTING_RECORD_ID', None)
         
         # Capture the resolved profile name now, while profile context is
@@ -4654,7 +4652,6 @@ def _run_agent_streaming(
             str(s.workspace),
             session_id,
             _profile_home,
-            getattr(s, 'eid_subject', None),
             getattr(s, 'record_id', None),
         )
         _set_thread_env(**_thread_env)
@@ -4674,6 +4671,7 @@ def _run_agent_streaming(
             old_session_id = os.environ.get('HERMES_SESSION_ID')
             old_session_platform = os.environ.get('HERMES_SESSION_PLATFORM')
             old_hermes_home = os.environ.get('HERMES_HOME')
+            old_eid_record_id = os.environ.get('HERMES_EID_RECORD_ID')
             os.environ.update(_profile_runtime_env)
             os.environ['TERMINAL_CWD'] = str(s.workspace)
             os.environ['HERMES_EXEC_ASK'] = '1'
@@ -4691,6 +4689,10 @@ def _run_agent_streaming(
                 # the lock (#2024).
                 if patch_skill_home_modules is not None:
                     patch_skill_home_modules(Path(_profile_home))
+            if getattr(s, 'record_id', None):
+                os.environ['HERMES_EID_RECORD_ID'] = str(s.record_id)
+            else:
+                os.environ.pop('HERMES_EID_RECORD_ID', None)
         # Lock released — agent runs without holding it
         # ── MCP Server Discovery (lazy import, idempotent) ──
         # MUST run AFTER the HERMES_HOME mutation above — `discover_mcp_tools()`
@@ -6945,6 +6947,10 @@ def _run_agent_streaming(
                 else: os.environ['HERMES_SESSION_PLATFORM'] = old_session_platform
                 if old_hermes_home is None: os.environ.pop('HERMES_HOME', None)
                 else: os.environ['HERMES_HOME'] = old_hermes_home
+                if old_eid_record_id is None:
+                    os.environ.pop('HERMES_EID_RECORD_ID', None)
+                else:
+                    os.environ['HERMES_EID_RECORD_ID'] = old_eid_record_id
 
     except Exception as e:
         print('[webui] stream error:\n' + traceback.format_exc(), flush=True)

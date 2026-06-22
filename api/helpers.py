@@ -20,7 +20,9 @@ _CLIENT_DISCONNECT_ERRORS = (
     ssl.SSLError,
 )
 
-EMBED_ALLOWED_ORIGIN = 'http://localhost:5173'
+EMBED_ALLOWED_ORIGIN = str(
+    os.environ.get('HERMES_WEBUI_EMBED_ALLOWED_ORIGIN') or 'http://localhost:5173'
+).strip() or 'http://localhost:5173'
 FRAME_ANCESTORS_VALUE = f"'self' {EMBED_ALLOWED_ORIGIN}"
 LEGACY_X_FRAME_OPTIONS_VALUE = f"ALLOW-FROM {EMBED_ALLOWED_ORIGIN}"
 
@@ -386,10 +388,6 @@ def redact_session_data(session_dict: dict) -> dict:
     from api.config import load_settings
     _enabled = bool(load_settings().get("api_redact_enabled", True))
     result = dict(session_dict)
-    # Trusted EID identity is server-side state: it must never round-trip
-    # through the browser (it is re-resolved from proxy headers per request).
-    result.pop('eid_subject', None)
-    result.pop('eid_tenant', None)
     if isinstance(result.get('title'), str):
         result['title'] = _redact_text(result['title'], _enabled=_enabled)
     if 'messages' in result:

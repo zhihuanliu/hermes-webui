@@ -380,6 +380,12 @@ function applySessionTitleUpdate(sid, titleText, options={}){
 }
 
 async function send(){
+  if(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.recordBlocked){
+    if(typeof window.showChatbotRecordRequirement==='function'){
+      window.showChatbotRecordRequirement(window.__HERMES_CHATBOT_CONTEXT__.invalidRecordId?'invalid':'missing');
+    }
+    return;
+  }
   // Reject concurrent invocations early — before any await yields control.
   // If a send is already in-flight (e.g. queue drain), re-queue the message
   // instead of silently dropping it.

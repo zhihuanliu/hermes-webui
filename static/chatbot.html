@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -31,8 +31,71 @@
 <script>window.__HERMES_CONFIG__={maxUploadBytes:__MAX_UPLOAD_BYTES__,csrfToken:__CSRF_TOKEN_JSON__};</script>
 <script>(function(){
   var params=new URLSearchParams(location.search);
-  var recordId=(params.get('record_id')||'').trim();
-  window.__HERMES_CHATBOT_CONTEXT__={recordId:recordId||null};
+  var raw=(params.get('record_id')||'').trim();
+  var valid=/^[A-Za-z0-9_-]{1,128}$/.test(raw);
+  window.__HERMES_CHATBOT_CONTEXT__={
+    recordId:valid?raw:null,
+    invalidRecordId:raw&&!valid?raw:null,
+    missingRecordId:!raw,
+    recordRequired:true,
+    locale:'zh',
+    botDisplayName:'助手'
+  };
+  try{localStorage.setItem('hermes-lang','zh');}catch(_){}
+})()</script>
+<script>(function(){
+  window.showChatbotRecordRequirement=function(reason){
+    var ctx=window.__HERMES_CHATBOT_CONTEXT__||{};
+    var invalid=reason==='invalid'||!!ctx.invalidRecordId;
+    ctx.recordBlocked=true;
+    window.__HERMES_CHATBOT_CONTEXT__=ctx;
+    document.body&&document.body.classList.add('chatbot-record-blocked');
+    var empty=document.getElementById('emptyState');
+    if(empty){
+      empty.classList.remove('chatbot-startup-loading');
+      empty.removeAttribute('aria-busy');
+      empty.style.display='';
+    }
+    var notice=document.getElementById('chatbotRecordRequiredNotice');
+    if(notice){
+      notice.hidden=false;
+      var title=document.getElementById('chatbotRecordRequiredTitle');
+      var body=document.getElementById('chatbotRecordRequiredBody');
+      var error=document.getElementById('chatbotRecordRequiredError');
+      if(title) title.textContent=invalid?'record_id 格式无效':'缺少 record_id';
+      if(body) body.textContent=invalid
+        ?'当前嵌入地址里的 record_id 不符合格式要求，助手无法确认业务记录。'
+        :'当前助手必须绑定到一条业务记录后才能开始聊天。';
+      if(error) error.textContent=invalid
+        ?'错误描述：record_id 只能包含 1-128 位字母、数字、下划线或连字符。'
+        :'错误描述：URL 中没有提供 record_id，无法创建或恢复业务记录会话。';
+    }
+    var msg=document.getElementById('msg');
+    if(msg){
+      msg.value='';
+      msg.disabled=true;
+      msg.placeholder=invalid?'record_id 格式无效':'缺少 record_id，无法聊天';
+      msg.setAttribute('aria-disabled','true');
+    }
+    ['btnSend','btnNewChat','cbExpandBtn','sessionSearch','sessionSearchClear'].forEach(function(id){
+      var el=document.getElementById(id);
+      if(el) el.disabled=true;
+    });
+    document.querySelectorAll('.suggestion').forEach(function(btn){btn.disabled=true;});
+    var status=document.getElementById('composerStatus');
+    if(status){
+      status.textContent='';
+      status.style.display='none';
+    }
+    var topTitle=document.getElementById('topbarTitle');
+    if(topTitle) topTitle.textContent='助手暂不可用';
+    var topMeta=document.getElementById('topbarMeta');
+    if(topMeta) topMeta.textContent=invalid?'请修正嵌入链接':'请提供业务记录 ID';
+    var list=document.getElementById('sessionList');
+    if(list){
+      list.innerHTML='<div class="chatbot-sidebar-blocked">需要 record_id 才能加载对话</div>';
+    }
+  };
 })()</script>
 <script>(function(){
   var cfg=window.__HERMES_CONFIG__||{},token=cfg.csrfToken||'';
@@ -178,6 +241,109 @@
     body.chatbot-view .session-action-menu button[title="Assign a project to this conversation"] {
       display: none !important;
     }
+    .empty-state.chatbot-startup-loading .empty-logo,
+    .empty-state.chatbot-startup-loading h2,
+    .empty-state.chatbot-startup-loading p,
+    .empty-state.chatbot-startup-loading .suggestion-grid {
+      display: none;
+    }
+    .chatbot-startup-loader {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .empty-state.chatbot-startup-loading .chatbot-startup-loader {
+      display: flex;
+    }
+    .chatbot-startup-spinner {
+      width: 28px;
+      height: 28px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent-text);
+      border-radius: 50%;
+      animation: chatbot-startup-spin .8s linear infinite;
+    }
+    @keyframes chatbot-startup-spin {
+      to { transform: rotate(360deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .chatbot-startup-spinner { animation: none; }
+    }
+    .chatbot-record-required-notice {
+      display: none;
+      width: min(360px, calc(100vw - 40px));
+      padding: 24px 22px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 88%, var(--bg) 12%);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, .22);
+      text-align: left;
+      color: var(--text);
+    }
+    body.chatbot-record-blocked .empty-state > .empty-logo,
+    body.chatbot-record-blocked .empty-state > h2,
+    body.chatbot-record-blocked .empty-state > p,
+    body.chatbot-record-blocked .empty-state > .suggestion-grid,
+    body.chatbot-record-blocked .chatbot-startup-loader {
+      display: none !important;
+    }
+    body.chatbot-record-blocked .chatbot-record-required-notice {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .chatbot-record-required-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      color: var(--accent-text);
+      background: color-mix(in srgb, var(--accent) 16%, transparent);
+      border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+    }
+    .chatbot-record-required-title {
+      margin: 2px 0 0;
+      font-size: 18px;
+      line-height: 1.25;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+    .chatbot-record-required-body,
+    .chatbot-record-required-error {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.65;
+      color: var(--muted);
+    }
+    .chatbot-record-required-error {
+      color: var(--text);
+      font-weight: 500;
+    }
+    .chatbot-sidebar-blocked {
+      margin: 10px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      background: color-mix(in srgb, var(--panel) 86%, var(--bg) 14%);
+    }
+    body.chatbot-record-blocked .composer-box {
+      opacity: .72;
+    }
+    body.chatbot-record-blocked #msg {
+      cursor: not-allowed;
+    }
+    body.chatbot-record-blocked .composer-status {
+      display: none !important;
+    }
   </style>
 </head>
 <body class="chatbot-view">
@@ -192,7 +358,7 @@
       <div class="panel-head">
         <span>对话</span>
         <div class="panel-head-actions">
-          <button class="panel-head-btn has-tooltip has-tooltip--bottom-right" id="btnNewChat" data-tooltip="New conversation (Cmd+K)" data-i18n-title="new_conversation" aria-label="New conversation">
+          <button class="panel-head-btn has-tooltip has-tooltip--bottom-right" id="btnNewChat" data-i18n-title="new_conversation" aria-label="新建对话">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
           <button class="panel-head-btn cb-sidebar-collapse-btn has-tooltip has-tooltip--bottom-right" id="cbCollapseBtn" type="button" title="折叠侧栏" aria-label="折叠侧栏">
@@ -200,7 +366,7 @@
           </button>
         </div>
       </div>
-      <div class="session-search sidebar-search"><div class="session-search-field"><svg class="sidebar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><input id="sessionSearch" placeholder="Filter conversations..." data-i18n-placeholder="filter_conversations" oninput="filterSessions()" autocomplete="off"><button type="button" id="sessionSearchClear" class="session-search-clear has-tooltip has-tooltip--bottom-right" aria-label="Clear conversation filter" data-tooltip="Clear conversation filter" onclick="clearSessionSearch()" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div></div>
+      <div class="session-search sidebar-search"><div class="session-search-field"><svg class="sidebar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><input id="sessionSearch" placeholder="筛选对话…" data-i18n-placeholder="filter_conversations" oninput="filterSessions()" autocomplete="off"><button type="button" id="sessionSearchClear" class="session-search-clear has-tooltip has-tooltip--bottom-right" aria-label="清除筛选" data-tooltip="清除筛选" onclick="clearSessionSearch()" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div></div>
       <div class="session-list" id="sessionList"></div>
     </div>
 
@@ -252,7 +418,19 @@
       <button id="jumpToSessionStartBtn" class="session-jump-btn session-jump-btn--start" aria-label="Jump to beginning of session" data-i18n-aria-label="session_jump_start_label" data-i18n-title="session_jump_start_label" onclick="jumpToSessionStart()" style="display:none"><span aria-hidden="true">↑</span><span data-i18n="session_jump_start">Start</span></button>
       <button id="scrollToBottomBtn" class="scroll-to-bottom-btn" style="display:none" onclick="scrollToBottom()" aria-label="Scroll to bottom" data-i18n-aria-label="session_jump_end_label" data-i18n-title="session_jump_end_label"><span aria-hidden="true">↓</span><span class="session-jump-btn__text" data-i18n="session_jump_end">End</span></button>
     <div class="messages" id="messages">
-      <div class="empty-state" id="emptyState">
+      <div class="empty-state chatbot-startup-loading" id="emptyState" aria-busy="true">
+        <div class="chatbot-startup-loader" role="status" aria-live="polite">
+          <span class="chatbot-startup-spinner" aria-hidden="true"></span>
+          <span data-i18n="loading">Loading...</span>
+        </div>
+        <div class="chatbot-record-required-notice" id="chatbotRecordRequiredNotice" role="alert" aria-live="assertive" hidden>
+          <span class="chatbot-record-required-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+          </span>
+          <h2 class="chatbot-record-required-title" id="chatbotRecordRequiredTitle">缺少 record_id</h2>
+          <p class="chatbot-record-required-body" id="chatbotRecordRequiredBody">当前助手必须绑定到一条业务记录后才能开始聊天。</p>
+          <p class="chatbot-record-required-error" id="chatbotRecordRequiredError">错误描述：URL 中没有提供 record_id，无法创建或恢复业务记录会话。</p>
+        </div>
         <div class="empty-logo"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="80" height="80" aria-label="Hermes caduceus">
           <defs>
             <linearGradient id="hermes-gold" x1="0%" y1="0%" x2="0%" y2="100%">
@@ -307,7 +485,7 @@
     </div>
     <div class="composer-wrap" id="composerWrap">
       <div class="composer-flyout">
-      <div id="queueCard" class="queue-card" role="region" aria-label="Queued messages" aria-live="polite">
+      <div id="queueCard" class="queue-card" role="region" aria-label="排队消息" aria-live="polite">
         <div id="queueChips" class="queue-card-inner"></div>
       </div>
       <div class="approval-card" id="approvalCard" role="alertdialog" aria-labelledby="approvalHeading" aria-describedby="approvalDesc">
@@ -398,16 +576,16 @@
       <div id="handoffHintContainer" class="handoff-hint-container" style="display:none;"></div>
       </div>
       <div class="queue-pill-outer">
-        <button id="queuePill" class="queue-pill" aria-label="Show queued messages" type="button"></button>
+        <button id="queuePill" class="queue-pill" aria-label="显示排队消息" type="button"></button>
       </div>
       <div class="composer-box" id="composerBox">
         <div class="cmd-dropdown" id="cmdDropdown"></div>
         <div class="drop-hint" id="dropHint">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-          <span id="dropHintText">Drop files to attach</span>
+          <span id="dropHintText">拖放文件以附加</span>
         </div>
         <div class="attach-tray" id="attachTray"></div>
-        <div class="mic-status" id="micStatus" style="display:none"><span class="mic-dot"></span> Listening…</div>
+        <div class="mic-status" id="micStatus" style="display:none"><span class="mic-dot"></span> <span data-i18n="voice_listening">正在聆听…</span></div>
         <div class="voice-mode-bar" id="voiceModeBar" style="display:none">
           <span class="voice-mode-indicator" id="voiceModeIndicator"></span>
           <span class="voice-mode-label" id="voiceModeLabel"></span>
@@ -438,7 +616,7 @@
               </div>
             </div>
             <span class="bg-badge" id="bgBadge" style="display:none" title="Background tasks running">0</span>
-            <button class="send-btn has-tooltip has-tooltip--left" id="btnSend" data-tooltip="Send message" disabled>
+            <button class="send-btn has-tooltip has-tooltip--left" id="btnSend" data-i18n-title="composer_send" aria-label="发送消息" disabled>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
             </button>
           </div>
@@ -881,7 +1059,51 @@ document.getElementById('mobileOverlay')?.addEventListener('click', () => {
 <!-- Chatbot-specific Chinese overrides for strings not covered by the i18n system -->
 <script>
 (function(){
-  // 1. Translate "Unassigned" chip rendered by sessions.js (no i18n key)
+  var CHATBOT_LOCALE='zh-CN';
+  var DROP_HINT_ATTACH='拖放文件以附加';
+  var DROP_HINT_WS='拖放以插入工作区引用';
+
+  function _clearStartupLoading(){
+    var empty=document.getElementById('emptyState');
+    if(!empty) return;
+    empty.classList.remove('chatbot-startup-loading');
+    empty.removeAttribute('aria-busy');
+  }
+
+  function _applyChatbotLocale(){
+    if(typeof setLocale==='function') setLocale('zh');
+    if(typeof applyLocaleToDOM==='function') applyLocaleToDOM();
+    var botName=String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.botDisplayName||'').trim();
+    if(botName){
+      window._botName=botName;
+      if(typeof applyBotName==='function') applyBotName();
+    }
+  }
+
+  function _patchDateFormatting(){
+    if(typeof window._formatMessageFooterTimestamp!=='function') return;
+    if(window._formatMessageFooterTimestamp.__chatbotZh) return;
+    var orig=window._formatMessageFooterTimestamp;
+    function patched(tsVal){
+      if(!tsVal) return '';
+      var date=new Date(tsVal*1000);
+      var now=new Date();
+      var sameDay=date.getFullYear()===now.getFullYear()
+        &&date.getMonth()===now.getMonth()
+        &&date.getDate()===now.getDate();
+      try{
+        if(sameDay){
+          return date.toLocaleTimeString(CHATBOT_LOCALE,{hour:'2-digit',minute:'2-digit',hour12:false});
+        }
+        return date.toLocaleString(CHATBOT_LOCALE,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});
+      }catch(_){
+        return orig(tsVal);
+      }
+    }
+    patched.__chatbotZh=true;
+    window._formatMessageFooterTimestamp=patched;
+  }
+
   function _patchUnassigned(){
     var list=document.getElementById('sessionList');
     if(!list) return;
@@ -889,32 +1111,67 @@ document.getElementById('mobileOverlay')?.addEventListener('click', () => {
       if(chip.textContent.trim()==='Unassigned') chip.textContent='未分配';
     });
   }
-  // 2. Translate "Loading conversation..." injected by loadSession() in sessions.js
+
   function _patchLoadingText(node){
     if(!node) return;
     node.querySelectorAll('div').forEach(function(el){
-      if(el.textContent.trim()==='Loading conversation...')
-        el.textContent='正在加载...';
+      var text=el.textContent.trim();
+      if(text==='Loading conversation...') el.textContent='正在加载...';
+      if(text==='Loading...') el.textContent='加载中…';
     });
   }
-  function _patch(){ _patchUnassigned(); }
-  // Watch msgInner for the loading div
+
+  function _patchDropHint(){
+    var hint=document.getElementById('dropHintText');
+    if(!hint||hint.__chatbotHintMo) return;
+    var map={'Drop files to attach':DROP_HINT_ATTACH,'Drop to insert workspace reference':DROP_HINT_WS};
+    function sync(){
+      var next=map[hint.textContent.trim()];
+      if(next) hint.textContent=next;
+    }
+    sync();
+    var mo=new MutationObserver(sync);
+    mo.observe(hint,{childList:true,characterData:true,subtree:true});
+    hint.__chatbotHintMo=mo;
+  }
+
+  function _patch(){
+    _applyChatbotLocale();
+    _patchDateFormatting();
+    _patchUnassigned();
+    _patchDropHint();
+    if(typeof renderMessages==='function') renderMessages();
+  }
+
   var _msgMo=new MutationObserver(function(records){
-    records.forEach(function(r){r.addedNodes.forEach(function(n){if(n.nodeType===1)_patchLoadingText(n);});});
+    records.forEach(function(r){r.addedNodes.forEach(function(n){if(n.nodeType===1){_clearStartupLoading();_patchLoadingText(n);}});});
   });
   var _msgAttach=setInterval(function(){
     var el=document.getElementById('msgInner');
     if(el){clearInterval(_msgAttach);_msgMo.observe(el,{childList:true,subtree:true});}
   },200);
-  // Apply once after boot completes
+
+  function _bootProgressReady(){
+    return typeof S!=='undefined'&&(S._bootReady||(S.session&&S.session.session_id));
+  }
+
+  function _onBootProgress(){
+    if(!_bootProgressReady()) return false;
+    _clearStartupLoading();
+    _patch();
+    return true;
+  }
+
   var _timer=setInterval(function(){
-    if(typeof S!=='undefined'&&S._bootReady){
-      clearInterval(_timer);
-      _patch();
-    }
+    if(_onBootProgress()) clearInterval(_timer);
   },200);
-  setTimeout(function(){clearInterval(_timer);_patch();},6000);
-  // Also watch sessionList for re-renders
+  // WSL-backed state can make boot take 10–30s; don't keep the spinner forever.
+  setTimeout(function(){
+    clearInterval(_timer);
+    _clearStartupLoading();
+    _patch();
+  },12000);
+
   var _mo=new MutationObserver(_patchUnassigned);
   var _attach=setInterval(function(){
     var el=document.getElementById('sessionList');

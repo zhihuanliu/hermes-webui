@@ -339,13 +339,11 @@ Full list of environment variables:
 | `HERMES_CONFIG_PATH` | `$HERMES_HOME/config.yaml` | Path to Hermes config file |
 | `HERMES_WEBUI_AGENT_CACHE_MAX` | `25` | Max live agent instances kept warm in the in-memory LRU. Each pins a full conversation transcript, so this is the dominant lever on resident memory — lower it on installs with many long sessions to cap RAM (at the cost of more cold reloads) |
 | `HERMES_WEBUI_SESSIONS_MAX` | `100` | Max compact `Session` objects held in the in-memory LRU. Lighter than the agent cache; lower it on installs with hundreds of sessions |
-| `HERMES_WEBUI_EID_CONTEXT` | *(unset)* | Set to `1` to enable trusted EID identity and record-scoped sessions |
-| `HERMES_WEBUI_EID_TRUST_PROXY` | *(unset)* | Trust proxy-injected `X-EID-Subject`, optional `X-EID-Tenant`, and optional `X-EID-Delegation` headers; only enable when direct access to Hermes is blocked |
-| `HERMES_WEBUI_EID_AUTHORIZE_URL` | *(unset)* | EID endpoint used to authorize the authenticated subject for a requested `record_id`; record sessions fail closed when missing |
-| `HERMES_WEBUI_EID_AUTHORIZE_TIMEOUT` | `5` | EID authorization request timeout in seconds, clamped to 0.1-30 |
-| `HERMES_WEBUI_EID_AUTHORIZE_CACHE_TTL` | `30` | Seconds to cache successful record authorizations per `(subject, tenant, record)`, clamped to 0-300; `0` disables caching. Denials and failures are never cached; revocation latency is bounded by this TTL |
-| `HERMES_WEBUI_EID_DEVELOPMENT_MODE` | *(unset)* | Explicit local-development identity mode; production deployments must leave it disabled |
-| `HERMES_WEBUI_EID_DEVELOPMENT_SUBJECT` | *(unset)* | Fixed subject required by EID development mode; never read from the iframe URL |
+| `HERMES_WEBUI_EID_RECORD_CONTEXT` | *(unset)* | Set to `1` to enable record-scoped EID embedded chat (`/chatbot?record_id=<id>`); no EID login, identity headers, or authorization endpoint |
+| `HERMES_WEBUI_EMBED_ALLOWED_ORIGIN` | `http://localhost:5174` | Parent page origin allowed to iframe this WebUI (`Content-Security-Policy: frame-ancestors`) |
+| `HERMES_WEBUI_CHAT_BACKEND` | *(unset / legacy)* | Set to `gateway` when chat runs through a remote Hermes Agent Gateway |
+| `HERMES_WEBUI_GATEWAY_BASE_URL` | *(unset)* | Gateway origin, e.g. `http://192.168.208.23:8642` |
+| `HERMES_WEBUI_GATEWAY_API_KEY` | *(unset)* | Bearer token for Gateway; must match Agent `API_SERVER_KEY`. Never commit real values |
 
 ---
 
@@ -366,31 +364,39 @@ query string.
 
 ### EID record-scoped embedded chat
 
-When EID integration is enabled, `/chatbot?record_id=<id>` creates or restores a
-conversation owned by the authenticated EID subject and that record. The browser
-never supplies `user_id`; production identity must come from a reverse proxy that
-authenticates the EID Cookie, removes client-supplied identity headers, and injects
-trusted headers before forwarding to Hermes. Keep Hermes bound to an internal
-listener so clients cannot bypass that proxy.
+When `HERMES_WEBUI_EID_RECORD_CONTEXT=1`, the embedding page passes only
+`/chatbot?record_id=<id>`. Hermes creates, restores, lists, and runs conversations
+partitioned by `(record_id, profile)` without EID login, user identity, tenant,
+delegation tokens, or a remote authorization endpoint.
 
-Record access is checked through `HERMES_WEBUI_EID_AUTHORIZE_URL` before a record
-session is created or restored. Missing or unavailable authorization fails closed.
-Because the ownership guard runs on every request that names a record session
-(including stream-status polling), successful grants are cached in-process for
-`HERMES_WEBUI_EID_AUTHORIZE_CACHE_TTL` seconds; denials are always re-checked.
-For local development only:
+`record_id` is a routing key for session and business-data scoping, not an access
+credential. The scheme assumes a trusted internal network or controlled entry;
+it does not prevent callers who know or guess a `record_id` from entering that
+partition.
+
+Production deployment with eid-web and a remote Gateway:
 
 ```bash
-HERMES_WEBUI_EID_CONTEXT=1 \
-HERMES_WEBUI_EID_DEVELOPMENT_MODE=1 \
-HERMES_WEBUI_EID_DEVELOPMENT_SUBJECT=local-developer \
+cp .env.eid-webui.example .env
+# edit .env — set HERMES_WEBUI_GATEWAY_API_KEY
+docker compose -f docker-compose.eid-webui.yml up -d --build
+```
+
+Typical environment:
+
+```bash
+HERMES_WEBUI_EID_RECORD_CONTEXT=1 \
+HERMES_WEBUI_EMBED_ALLOWED_ORIGIN=http://192.168.208.23:8080 \
+HERMES_WEBUI_CHAT_BACKEND=gateway \
+HERMES_WEBUI_GATEWAY_BASE_URL=http://192.168.208.23:8642 \
+HERMES_WEBUI_GATEWAY_API_KEY=<same as API_SERVER_KEY> \
 python server.py
 ```
 
-Profile `.env` values such as `SHIP_LIGHTING_RECORD_ID` are ignored during EID
-sessions. Dynamic record context is exposed as `HERMES_EID_RECORD_ID` in the
-per-run thread context and in non-persisted Agent context; it is not written into
-the process-global environment.
+Embedded API requests from `chatbot.html` automatically append the active
+`record_id`. Gateway chat requests send `X-EID-Record-Id`; in-process agent runs
+receive `HERMES_EID_RECORD_ID` in thread-local env. Profile `.env` values such as
+`SHIP_LIGHTING_RECORD_ID` are ignored during EID record sessions.
 
 ### Manual launch (without start.sh)
 

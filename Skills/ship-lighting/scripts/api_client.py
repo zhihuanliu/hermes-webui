@@ -7,16 +7,17 @@ Base URL: http://192.168.208.23:5000/api/v1
 """
 
 import json
-import os
 import urllib.request
 import urllib.error
 import urllib.parse
 from pathlib import Path
 
-API_BASE = os.environ.get(
-    "SHIP_LIGHTING_API_BASE",
-    "http://192.168.208.23:5000/api/v1",
-).rstrip("/")
+API_BASE = "http://192.168.208.23:5000/api/v1"
+DEFAULT_RECORD_ID = "210e9a838a5341d982c7f26d8036b11a"
+# 环境变量覆盖：不同 profile 在 .env 中设置 SHIP_LIGHTING_RECORD_ID
+_env_record_id = __import__("os").environ.get("SHIP_LIGHTING_RECORD_ID")
+if _env_record_id:
+    DEFAULT_RECORD_ID = _env_record_id
 
 
 # ═══════════════════════════════════════════════
@@ -27,7 +28,6 @@ def _request(method: str, endpoint: str, params: dict = None, data: dict = None,
              files: dict = None) -> dict:
     """通用 HTTP 请求"""
     url = f"{API_BASE}/{endpoint}"
-    headers = _eid_headers()
 
     # Query params
     if params:
@@ -38,14 +38,16 @@ def _request(method: str, endpoint: str, params: dict = None, data: dict = None,
             # multipart/form-data (for file uploads)
             import io
             body, boundary = _encode_multipart(data or {}, files)
-            headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
-            req = urllib.request.Request(url, data=body, method=method, headers=headers)
+            req = urllib.request.Request(url, data=body, method=method,
+                                         headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
         elif data is not None:
             body = json.dumps(data).encode("utf-8")
-            headers["Content-Type"] = "application/json"
-            req = urllib.request.Request(url, data=body, method=method, headers=headers)
+            req = urllib.request.Request(url, data=body, method=method,
+                                         headers={"Content-Type": "application/json",
+                                                  "Accept": "application/json"})
         else:
-            req = urllib.request.Request(url, method=method, headers=headers)
+            req = urllib.request.Request(url, method=method,
+                                         headers={"Accept": "application/json"})
 
         with urllib.request.urlopen(req, timeout=30) as resp:
             body = json.loads(resp.read().decode("utf-8"))
@@ -60,30 +62,6 @@ def _request(method: str, endpoint: str, params: dict = None, data: dict = None,
         return {"_error": str(e)}
 
     return body
-
-
-def _eid_headers() -> dict:
-    """Build per-call EID identity headers from Hermes' trusted child env."""
-    subject = os.environ.get("HERMES_EID_SUBJECT", "").strip()
-    if not subject:
-        raise RuntimeError("缺少 Hermes 服务端绑定的 EID 用户上下文")
-
-    headers = {
-        "Accept": "application/json",
-        "X-EID-Subject": subject,
-    }
-    tenant = os.environ.get("HERMES_EID_TENANT", "").strip()
-    delegation = os.environ.get("HERMES_EID_DELEGATION", "").strip()
-    development_mode = os.environ.get(
-        "HERMES_WEBUI_EID_DEVELOPMENT_MODE", ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    if not delegation and not development_mode:
-        raise RuntimeError("缺少 Hermes 服务端绑定的 EID 委托令牌")
-    if tenant:
-        headers["X-EID-Tenant"] = tenant
-    if delegation:
-        headers["Authorization"] = f"Bearer {delegation}"
-    return headers
 
 
 def _encode_multipart(data: dict, files: dict) -> (bytes, str):
@@ -324,7 +302,7 @@ def update_compartment(record_id: str, deck_id: str, compartment_id: str,
     }
     响应: {code: 0, data: {record_id, deck_id, compartment_id}}
     示例:
-        update_compartment("<server-bound-record-id>", "DECK 4", "comp_123",
+        update_compartment(DEFAULT_RECORD_ID, "DECK 4", "comp_123",
                           "新舱室", "居住舱室",
                           [[10,20],[30,20],[30,60],[10,60]])
     """
@@ -510,7 +488,7 @@ def update_load(record_id: str, load_id: str,
     }
     响应: {code: 0, data: {record_id, load_id}}
     示例:
-        update_load("<server-bound-record-id>", "load_001",
+        update_load(DEFAULT_RECORD_ID, "load_001",
                     "主引擎", "PC",
                     "comp_123", "msb_001")
     """
@@ -881,7 +859,7 @@ def get_canvas_all(record_id: str, system_type: str) -> dict:
     """获取画布完整数据（核心接口）
     API: GET /canvas/all?record_id=xxx[&system_type=primary/secondary/lighting]
     参数:
-        record_id   - Hermes 服务端绑定的当前会话记录 ID
+        record_id   - 记录id（默认 DEFAULT_RECORD_ID）
         system_type - 系统类型过滤: primary(一次系统) / secondary(二次系统) / lighting(照明系统)
                       不传则返回全部（此时数据在 primary/secondary/lighting 三个子对象中）
     响应结构:

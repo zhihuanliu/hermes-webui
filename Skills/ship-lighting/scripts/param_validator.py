@@ -533,9 +533,9 @@ def get_tool_help(tool: str) -> dict:
     return {
         "tool": tool,
         "api_tool": api_tool,
-        "required": [p for p in rules.get("required", []) if p != "record_id"],
-        "optional": [p for p in rules.get("optional", []) if p != "record_id"],
-        "types": {k: v for k, v in rules.get("types", {}).items() if k != "record_id"},
+        "required": rules.get("required", []),
+        "optional": rules.get("optional", []),
+        "types": rules.get("types", {}),
         "enums": rules.get("enums", {}),
         "hints": rules.get("hints", {}),
     }

@@ -161,14 +161,13 @@ Per-request environment variables (set by chat handler, restored after):
                          by this value, enabling per-session approval state.
     HERMES_HOME          Set to the active profile's directory before running agent.
                          Saved and restored around each agent run.
-    HERMES_EID_SUBJECT   Trusted EID subject for an EID-owned session. Thread-local only.
-    HERMES_EID_RECORD_ID Authorized record bound to the session. Thread-local only.
+    HERMES_EID_RECORD_ID EID record bound to the current session. Thread-local only.
 
-EID identity is not accepted from URL or JSON request fields. With
-`HERMES_WEBUI_EID_CONTEXT=1`, routes resolve identity from an explicitly trusted
-reverse proxy, or from the explicitly enabled fixed development subject. Record
-session ownership is persisted in the WebUI Session sidecar and index. The
-delegation token remains request-scoped and is never persisted.
+With `HERMES_WEBUI_EID_RECORD_CONTEXT=1`, the embedded chatbot reads `record_id`
+from its URL and uses it as the session partition key. Session lists, searches,
+details, mutations, and Agent context are scoped to the matching record. This
+mode intentionally has no EID user identity or record authorization boundary;
+`record_id` is routing context rather than an access credential.
 
 WARNING: These env vars are process-global. Two concurrent chat requests will clobber
 each other. This is safe only for single-user, single-concurrent-request use.
