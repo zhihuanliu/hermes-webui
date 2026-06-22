@@ -155,7 +155,7 @@ A community-maintained native Windows setup is documented at [@markwang2658/herm
 - **Memory:** community-measured ~330 MB native vs ~1080 MB with WSL2+Docker (varies by configuration).
 - **What works:** chat, workspace browser, session management, all themes.
 - **Known limitations:** some POSIX-style file paths surface in the workspace browser; bash-assuming agent tools may not work natively.
-- **Native Windows setup:** install Python 3.11+, then from the hermes-agent root in PowerShell: `python -m venv venv` → `pip install -r requirements.txt` → `pwsh .\start.ps1` (it auto-discovers `venv\Scripts\python.exe`).
+- **Native Windows setup:** install Python 3.11+, then run `pwsh .\start.ps1` from the WebUI repo. The launcher loads `.env` plus `.env.development` by default; use `-Environment production` to load `.env.production`. It supports native Agent paths and WSL UNC `HERMES_HOME` paths.
 - **WSL2 relationship:** not a prerequisite — a WSL2-built venv (`venv/bin/python`, ELF) isn't invokable by native Windows Python, so use the native setup above. WSL2 stays useful as a parallel install if you want the full `bootstrap.py` + Linux runtime.
 
 If provider setup is still incomplete after install, the onboarding wizard will point you to finish it with `hermes model` instead of trying to replicate the full CLI setup in-browser.
@@ -300,6 +300,16 @@ If an AI assistant is helping with install, reinstall, bootstrap, provider setup
 | Port | `HERMES_WEBUI_PORT` env or first argument, default `8787` |
 
 If discovery finds everything, nothing else is required.
+
+On native Windows, `start.ps1` loads layered local configuration:
+
+```powershell
+.\start.ps1                         # .env + .env.development
+.\start.ps1 -Environment production # .env + .env.production
+```
+
+Environment variables already set in the PowerShell process take precedence.
+An environment-specific file overrides values loaded from the base `.env`.
 
 ---
 

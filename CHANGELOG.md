@@ -4,6 +4,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Gateway-backed browser turns now include the WebUI session's durable model-facing conversation history for both `runs` and `completions` transports, without duplicating the eagerly checkpointed current user message. Gateway `clarify.request` IDs are preserved and clarification answers are forwarded to the active remote run before WebUI clears its local card. The ship-lighting confirmation contract now explicitly rejects plain-text “允许/确认” prompts in place of an actual `clarify` tool call.
 - Embedded chatbot iframes now show a startup loading indicator instead of a blank chat pane while the saved conversation or record-scoped empty state is being resolved.
 - Gateway-backed browser chat now bridges Hermes run SSE `approval.request` events into WebUI's existing approval card, `/api/approval/pending`, and `/api/approval/stream`, and forwards `/api/approval/respond` to `POST /v1/runs/{run_id}/approval` on the remote Gateway so embedded EID iframe chat can unblock `execute_code` and other gated tools.
 - Kanban board loads on Windows when `HERMES_HOME` / kanban data lives on a WSL UNC path (`\\wsl.localhost\...`). Windows `msvcrt` byte-range locks fail on those paths with `Resource deadlock avoided`; the WebUI bridge now skips the init lock there and returns a clear 503 if filesystem locking still fails.

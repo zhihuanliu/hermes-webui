@@ -23,6 +23,7 @@ AGENTS.local.md
 .cursorrules
 .windsurfrules
 .aider*
+.tmp-pytest/
 copilot-instructions.md
 
 # Generated screenshots and transient artifacts

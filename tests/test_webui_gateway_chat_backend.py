@@ -8,17 +8,20 @@ import urllib.error
 
 import api.gateway_chat as gateway_chat
 import api.models as models
+import api.routes as routes
 import api.streaming as streaming
 from api.config import STREAMS, create_stream_channel
 from api.models import new_session
 from api.gateway_chat import (
     _gateway_approval_payload,
+    _gateway_clarify_payload,
     _gateway_http_error_event,
     _gateway_run_event,
     _gateway_sse_delta,
     _gateway_stream_usage,
     _gateway_tool_progress_event,
     forward_gateway_approval_response,
+    forward_gateway_clarify_response,
     gateway_chat_config_status,
     register_gateway_session_run,
     webui_chat_backend_mode,
@@ -100,6 +103,19 @@ def test_gateway_stream_usage_normalizes_token_names():
         "estimated_cost": 0.01,
     }
     assert _gateway_stream_usage({}) == {}
+
+
+def test_gateway_clarify_payload_preserves_remote_clarification_id():
+    payload = _gateway_clarify_payload({
+        "event": "clarify.request",
+        "clarify_id": "remote-clarify-1",
+        "question": "Proceed?",
+        "choices": ["Allow", "Reject"],
+    })
+
+    assert payload["gateway_clarify_id"] == "remote-clarify-1"
+    assert payload["question"] == "Proceed?"
+    assert payload["choices_offered"] == ["Allow", "Reject"]
 
 
 def test_gateway_tool_progress_event_translates_gateway_lifecycle_payloads():
@@ -453,6 +469,13 @@ def test_gateway_chat_worker_normalizes_prefill_slice_before_system_prefix(tmp_p
     monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", fake_urlopen)
 
     s = new_session()
+    s.context_messages = [
+        {"role": "user", "content": "Design compartment lighting"},
+        {"role": "assistant", "content": "Please confirm execution"},
+        # Simulate an eager checkpoint of the current turn. The Gateway payload
+        # must still contain it exactly once.
+        {"role": "user", "content": "Say hello"},
+    ]
     stream_id = "stream-gateway-prefill-slice-test"
     s.active_stream_id = stream_id
     s.pending_user_message = "Say hello"
@@ -471,8 +494,16 @@ def test_gateway_chat_worker_normalizes_prefill_slice_before_system_prefix(tmp_p
 
     assert captured["normalizer_input"] == prefill_raw
     payload_messages = captured["body"]["messages"]
-    assert [m["role"] for m in payload_messages] == ["system", "assistant", "user"]
-    assert [m["content"] for m in payload_messages[1:]] == ["prefill summary", "Say hello"]
+    assert [m["role"] for m in payload_messages] == [
+        "system", "assistant", "user", "assistant", "user",
+    ]
+    assert [m["content"] for m in payload_messages[1:]] == [
+        "prefill summary",
+        "Design compartment lighting",
+        "Please confirm execution",
+        "Say hello",
+    ]
+    assert [m["content"] for m in payload_messages].count("Say hello") == 1
 
 
 def test_gateway_chat_worker_backfills_context_only_turns_into_display(tmp_path, monkeypatch):
@@ -819,6 +850,11 @@ def test_gateway_run_sse_forwards_approval_to_webui_stream(tmp_path, monkeypatch
     monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", fake_urlopen)
 
     s = new_session()
+    s.context_messages = [
+        {"role": "user", "content": "Design compartment lighting"},
+        {"role": "assistant", "content": "Please confirm execution"},
+        {"role": "user", "content": "run code"},
+    ]
     stream_id = "stream-gateway-approval-test"
     s.active_stream_id = stream_id
     s.pending_user_message = "run code"
@@ -845,6 +881,10 @@ def test_gateway_run_sse_forwards_approval_to_webui_stream(tmp_path, monkeypatch
     assert approval_events[0][1].get("approval_id")
     assert captured["url"].endswith("/v1/runs/run-approval-test/events")
     assert captured["start_body"]["session_id"] == s.session_id
+    assert captured["start_body"]["conversation_history"] == [
+        {"role": "user", "content": "Design compartment lighting"},
+        {"role": "assistant", "content": "Please confirm execution"},
+    ]
 
 
 def test_forward_gateway_approval_response_posts_to_remote_run(monkeypatch):
@@ -875,3 +915,71 @@ def test_forward_gateway_approval_response_posts_to_remote_run(monkeypatch):
     assert forward_gateway_approval_response("sess-1", "once") is True
     assert captured["url"] == "http://gateway.local/v1/runs/run-approval-test/approval"
     assert captured["body"] == {"choice": "once"}
+
+
+def test_forward_gateway_clarify_response_posts_to_remote_run(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"accepted":true}'
+
+        status = 200
+
+    def fake_urlopen(req, timeout=0):
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_BASE_URL", "http://gateway.local")
+    monkeypatch.setenv("HERMES_WEBUI_GATEWAY_API_KEY", "secret-token")
+    monkeypatch.setattr(gateway_chat.urllib.request, "urlopen", fake_urlopen)
+    register_gateway_session_run("sess-1", run_id="run/clarify", stream_id="stream-1")
+
+    assert forward_gateway_clarify_response("sess-1", "clarify/1", "Allow") is True
+    assert captured["url"] == (
+        "http://gateway.local/v1/runs/run%2Fclarify/clarifications/clarify%2F1/respond"
+    )
+    assert captured["body"] == {"response": "Allow"}
+
+
+def test_webui_clarify_response_forwards_gateway_answer_before_local_resolution(monkeypatch):
+    events = []
+    monkeypatch.setattr(routes, "get_clarify_pending", lambda sid: {
+        "clarify_id": "local-clarify-1",
+        "gateway_clarify_id": "remote-clarify-1",
+    })
+    monkeypatch.setattr(
+        gateway_chat,
+        "forward_gateway_clarify_response",
+        lambda sid, clarify_id, response: events.append(
+            ("gateway", sid, clarify_id, response)
+        ) or True,
+    )
+    monkeypatch.setattr(
+        routes,
+        "_resolve_clarify_legacy",
+        lambda sid, clarify_id, response: events.append(
+            ("local", sid, clarify_id, response)
+        ) or True,
+    )
+    monkeypatch.setattr(routes, "j", lambda handler, payload, status=200: (payload, status))
+
+    payload, status = routes._handle_clarify_respond(None, {
+        "session_id": "sess-1",
+        "clarify_id": "local-clarify-1",
+        "response": "Allow",
+    })
+
+    assert status == 200
+    assert payload == {"ok": True, "response": "Allow"}
+    assert events == [
+        ("gateway", "sess-1", "remote-clarify-1", "Allow"),
+        ("local", "sess-1", "local-clarify-1", "Allow"),
+    ]

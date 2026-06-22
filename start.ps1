@@ -29,13 +29,22 @@
     Bind address. Overrides HERMES_WEBUI_HOST env.
     Default: 127.0.0.1.
 
+.PARAMETER Environment
+    Environment-specific config suffix. Loads .env first, then
+    .env.<Environment>. Defaults to development. Explicit process environment
+    variables still take precedence over both files.
+
 .EXAMPLE
     .\start.ps1
-    # Bind to 127.0.0.1:8787, foreground.
+    # Load .env + .env.development and bind to 127.0.0.1:8787.
 
 .EXAMPLE
     .\start.ps1 -Port 9000
     # Bind to 127.0.0.1:9000.
+
+.EXAMPLE
+    .\start.ps1 -Environment production
+    # Load .env + .env.production.
 
 .EXAMPLE
     $env:HERMES_WEBUI_HOST = '0.0.0.0'
@@ -49,16 +58,31 @@
 [CmdletBinding()]
 param(
     [int]$Port = 0,
-    [string]$BindHost = ''
+    [string]$BindHost = '',
+    [ValidateSet('development', 'production')]
+    [string]$Environment = 'development'
 )
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSCommandPath
 
-# === Load .env (mirroring start.sh's filtering) ========================
-$envFile = Join-Path $RepoRoot '.env'
-if (Test-Path $envFile) {
-    foreach ($line in Get-Content $envFile -Encoding UTF8) {
+# === Load layered .env files (mirroring start.sh's filtering) ==========
+# Capture variables supplied by the caller before loading any file. These
+# always win. Values loaded from .env may then be overridden by the selected
+# .env.<environment> file.
+$explicitEnvKeys = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::OrdinalIgnoreCase
+)
+Get-ChildItem Env: | ForEach-Object { [void]$explicitEnvKeys.Add($_.Name) }
+
+function Import-HermesEnvFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
         $trimmed = $line.Trim()
         if (-not $trimmed -or $trimmed.StartsWith('#') -or -not $trimmed.Contains('=')) { continue }
         $kv = $trimmed -split '=', 2
@@ -66,16 +90,18 @@ if (Test-Path $envFile) {
         # Filter out shell-readonly vars (UID, GID, EUID, EGID, PPID) per start.sh
         if ($key -in @('UID', 'GID', 'EUID', 'EGID', 'PPID')) { continue }
         if ($key -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { continue }
-        # Explicit $null check — an env var explicitly set to '' should still
-        # be considered "set" and NOT overridden by .env (empty string is
-        # falsey in PowerShell, so a plain truthy check would mis-skip).
-        if ($null -ne [Environment]::GetEnvironmentVariable($key)) { continue }
+        if ($explicitEnvKeys.Contains($key)) { continue }
         $val = $kv[1]
         if ($val -match '^"(.*)"$') { $val = $Matches[1] }
         elseif ($val -match "^'(.*)'$") { $val = $Matches[1] }
         [Environment]::SetEnvironmentVariable($key, $val)
     }
 }
+
+$baseEnvFile = Join-Path $RepoRoot '.env'
+$environmentEnvFile = Join-Path $RepoRoot ".env.$Environment"
+Import-HermesEnvFile -Path $baseEnvFile
+Import-HermesEnvFile -Path $environmentEnvFile
 
 # === Find Python (matches start.sh order) ==============================
 $Python = $env:HERMES_WEBUI_PYTHON

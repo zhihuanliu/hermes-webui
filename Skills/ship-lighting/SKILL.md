@@ -44,6 +44,9 @@ metadata:
 
 6. **查询全量展示** — 所有字段、所有链接结构化表格呈现，不截断、不挑选。大量条目（如 220 盏灯）先展示前 10 条 + 汇总统计。
 7. **写操作双层确认** — `clarify(["✅ Allow","❌ Reject"])` → `echo "y" | dispatcher ... --confirm`。详见 [references/write-confirmation.md](references/write-confirmation.md)。
+  - 第一层必须真正调用 `clarify` 工具并等待其返回；仅在普通助手文本中写“请输入允许/确认”不算确认。
+  - 禁止结束当前 run 后，把用户下一条独立消息“允许”“确认”当作第一层确认。
+  - `clarify` 返回 Allow 后才可在同一 run 内进入第二层；Reject、超时或工具不可用都必须取消写操作。
 8. **缺参数返回结构化表格** — 引导用户补全：
 
    ```

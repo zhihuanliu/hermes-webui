@@ -83,9 +83,18 @@ messaging surfaces.
 By default, gateway-backed browser chat uses Hermes `POST /v1/runs` plus
 `GET /v1/runs/{run_id}/events` so dangerous-command **approvals** surface through
 the existing WebUI approval card and unblock via `POST /v1/runs/{run_id}/approval`.
+Each new Gateway turn receives the WebUI session's model-facing history
+(`context_messages`, falling back to the visible transcript), excluding the
+eagerly checkpointed current user message so it appears exactly once. Gateway
+`clarify.request` events surface through the existing clarification card; the
+answer is forwarded to
+`POST /v1/runs/{run_id}/clarifications/{clarify_id}/respond` before the local
+pending card is cleared.
 Set `HERMES_WEBUI_GATEWAY_TRANSPORT=completions` only when your Gateway lacks
 `/v1/runs`; that legacy transport does not emit approval SSE events, so approval
 cards will not appear during blocked tool calls.
 
 Attachments and cancellation still follow WebUI's compatibility path. Clarify
-prompt bridging depends on Gateway emitting `clarify.request` run events.
+prompt bridging depends on Gateway emitting `clarify.request` with a stable
+`clarify_id`; write-operation skills should call the real clarify tool instead
+of ending a turn with a plain-text request for “允许” or “确认”.

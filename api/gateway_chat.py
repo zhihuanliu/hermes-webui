@@ -7,6 +7,7 @@ import os
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -41,7 +42,9 @@ _GATEWAY_COMPLETIONS_TRANSPORTS = {"completions", "chat", "chat_completions", "c
 #     data: {"event":"approval.request","run_id":"...","command":"...",
 #            "description":"...","pattern_key":"...","pattern_keys":[...],...}
 # - POST /v1/runs/{run_id}/approval  body: {"choice":"once|session|always|deny"}
-# - Optional future: {"event":"clarify.request", ...}
+# - {"event":"clarify.request","clarify_id":"...", ...}
+# - POST /v1/runs/{run_id}/clarifications/{clarify_id}/respond
+#     body: {"response":"..."}
 # Chat completions (/v1/chat/completions) only guarantees hermes.tool.progress;
 # approval blocking there is invisible unless transport=runs (default).
 _GATEWAY_SESSION_RUNS: dict[str, dict[str, Any]] = {}
@@ -262,12 +265,18 @@ def _gateway_clarify_payload(payload: dict) -> dict:
     choices = data.get("choices") or data.get("choices_offered") or []
     if not isinstance(choices, list):
         choices = []
-    return {
+    normalized = {
         "question": str(data.get("question") or data.get("prompt") or "").strip(),
         "choices_offered": [str(c) for c in choices if str(c).strip()],
         "kind": "clarify",
         "requested_at": time.time(),
     }
+    gateway_clarify_id = data.get("clarify_id") or data.get("clarification_id") or data.get("id")
+    if gateway_clarify_id:
+        # Keep the remote id separately so the WebUI queue can retain its stable
+        # local clarify_id contract while the response is routed back to Gateway.
+        normalized["gateway_clarify_id"] = str(gateway_clarify_id)
+    return normalized
 
 
 def _bridge_gateway_approval_to_webui(session_id: str, payload: dict, put_gateway_event) -> dict:
@@ -335,6 +344,52 @@ def forward_gateway_approval_response(session_id: str, choice: str) -> bool:
         return False
     except Exception:
         logger.debug("Gateway approval respond failed for session %s", session_id, exc_info=True)
+        return False
+
+
+def forward_gateway_clarify_response(
+    session_id: str,
+    gateway_clarify_id: str,
+    response: str,
+) -> bool:
+    """Forward a WebUI clarification answer to the active remote Gateway run."""
+    entry = get_gateway_session_run(session_id)
+    run_id = str((entry or {}).get("run_id") or "").strip()
+    clarify_id = str(gateway_clarify_id or "").strip()
+    if not run_id or not clarify_id:
+        return False
+
+    from api.config import get_config
+
+    cfg = get_config()
+    base_url = _gateway_base_url(cfg)
+    api_key = _gateway_api_key()
+    quoted_run_id = urllib.parse.quote(run_id, safe="")
+    quoted_clarify_id = urllib.parse.quote(clarify_id, safe="")
+    url = f"{base_url}/v1/runs/{quoted_run_id}/clarifications/{quoted_clarify_id}/respond"
+    try:
+        session = get_session(session_id)
+    except KeyError:
+        session = None
+    headers = _gateway_request_headers(session_id, session, api_key, accept="application/json")
+    body = json.dumps({"response": str(response or "")}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            resp.read()
+            return resp.status in (200, 201, 202)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (404, 409):
+            return False
+        logger.warning(
+            "Gateway clarify respond failed for session %s run %s: HTTP %s",
+            session_id,
+            run_id,
+            exc.code,
+        )
+        return False
+    except Exception:
+        logger.debug("Gateway clarify respond failed for session %s", session_id, exc_info=True)
         return False
 
 
@@ -801,6 +856,19 @@ def _run_gateway_chat_streaming(
             logger.debug("Failed to load WebUI gateway prefill context", exc_info=True)
             prefill_messages = []
             _gateway_system_prompt = ""
+        try:
+            from api.streaming import _context_messages_for_new_turn, _sanitize_messages_for_api
+
+            # /api/chat/start eagerly checkpoints the current user turn before
+            # this worker starts. Reuse the native context helper so Gateway gets
+            # the durable model-facing history without duplicating msg_text.
+            session_history = _sanitize_messages_for_api(
+                _context_messages_for_new_turn(s, str(msg_text or "")),
+                cfg=cfg,
+            )
+        except Exception:
+            logger.exception("Failed to reconstruct WebUI session history for Gateway chat")
+            session_history = []
         base_url = _gateway_base_url(cfg)
         api_key = _gateway_api_key()
         headers = _gateway_request_headers(session_id, s, api_key, accept="text/event-stream")
@@ -818,8 +886,8 @@ def _run_gateway_chat_streaming(
         update_active_run(stream_id, phase="gateway-request", transport=transport)
         if transport == "runs":
             run_history = [
-                {"role": m.get("role"), "content": m.get("content")}
-                for m in prefill_messages
+                dict(m)
+                for m in [*prefill_messages, *session_history]
                 if isinstance(m, dict) and m.get("role") != "system"
             ]
             run_body = {
@@ -869,7 +937,11 @@ def _run_gateway_chat_streaming(
             body = {
                 "model": model or "default",
                 "stream": True,
-                "messages": [*prefill_messages, {"role": "user", "content": message_content}],
+                "messages": [
+                    *prefill_messages,
+                    *session_history,
+                    {"role": "user", "content": message_content},
+                ],
             }
             if model_provider:
                 body["provider"] = model_provider

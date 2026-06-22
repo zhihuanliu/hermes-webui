@@ -15,6 +15,19 @@ If your symptom isn't listed and the diagnostics don't narrow it down, file a bu
 1. **Agent installed but not on `sys.path`.** Most common. The agent is checked out somewhere (e.g. `~/Programmes/hermes-agent`), the WebUI was launched with a Python that doesn't know about it, and there's no `pip install -e .` linking the two.
 2. **Symlink with a typo or wrong target.** A symlink to the agent looks correct on `ls`, but `readlink` resolves to a path that doesn't exist or doesn't contain `agent/__init__.py`.
 3. **`HERMES_WEBUI_AGENT_DIR` set to the wrong directory.** Override env var beats auto-discovery and points at a directory that has no agent code.
+4. **Windows environment file not selected as expected.** `start.ps1` loads
+   `.env` plus `.env.development` by default. Use
+   `.\start.ps1 -Environment production` for `.env.production`.
+
+For a Windows WebUI using an Agent installed inside WSL, a development file can
+point `HERMES_HOME` at the WSL home:
+
+```dotenv
+HERMES_HOME=\\wsl.localhost\Ubuntu\home\<user>\.hermes
+HERMES_WEBUI_PYTHON=C:\path\to\hermes-webui\.venv\Scripts\python.exe
+```
+
+`start.ps1` then discovers `$HERMES_HOME\hermes-agent` through the UNC path.
 
 ### Step 1 — confirm the agent location
 

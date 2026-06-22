@@ -12914,6 +12914,24 @@ def _handle_clarify_respond(handler, body):
         return bad(handler, "response is required")
     clarify_id = body.get("clarify_id", "")
 
+    # Gateway clarify prompts are mirrored into api.clarify so the existing
+    # card/polling UI can render them. Resolving only that local queue does not
+    # unblock the remote run: forward the answer first, and keep the card
+    # pending when Gateway rejects or can no longer identify the run.
+    pending = get_clarify_pending(sid)
+    pending_local_id = str((pending or {}).get("clarify_id") or "")
+    gateway_clarify_id = str((pending or {}).get("gateway_clarify_id") or "")
+    matches_pending = not clarify_id or clarify_id == pending_local_id
+    if gateway_clarify_id and matches_pending:
+        from api.gateway_chat import forward_gateway_clarify_response
+
+        if not forward_gateway_clarify_response(sid, gateway_clarify_id, response):
+            return j(handler, {
+                "ok": False,
+                "error": "Gateway clarification response was not accepted; the prompt is still pending.",
+                "gateway_error": True,
+            }, status=502)
+
     from api.runtime_adapter import LegacyJournalRuntimeAdapter, runtime_adapter_enabled
 
     if runtime_adapter_enabled():
