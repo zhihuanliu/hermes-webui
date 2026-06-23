@@ -2269,6 +2269,15 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
         _setActivePaneIdleIfOwner();
         playNotificationSound();
         sendBrowserNotification('Response complete',assistantText?assistantText.slice(0,100):'Task finished');
+        if(typeof notifyEidParentTurnCompleted==='function'){
+          notifyEidParentTurnCompleted({
+            recordId:String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.recordId||''),
+            sessionId:completedSid,
+            messageCount:completedSession.message_count!=null?completedSession.message_count:((S.messages&&S.messages.length)||0),
+            completedAt:Date.now()/1000,
+            canvasUpdated:true,
+          });
+        }
       };
       if(_shouldUseStreamFade()&&assistantBody){
         _cancelAnimationFramePendingStreamRender();

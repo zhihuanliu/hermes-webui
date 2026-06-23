@@ -1162,6 +1162,7 @@ from api.helpers import (
     redact_session_data,
     _redact_text,
     _CLIENT_DISCONNECT_ERRORS,
+    EMBED_ALLOWED_ORIGIN,
 )
 from api.agent_health import build_agent_health_payload
 from api.gateway_chat import gateway_chat_config_status
@@ -4833,6 +4834,11 @@ def handle_get(handler, parsed) -> bool:
                 .replace("__WEBUI_VERSION__", version_token)
                 .replace("__MAX_UPLOAD_BYTES__", str(MAX_UPLOAD_BYTES))
                 .replace("__CSRF_TOKEN_JSON__", json.dumps(csrf_token))
+                .replace("__EMBED_ALLOWED_ORIGIN_JSON__", json.dumps(EMBED_ALLOWED_ORIGIN))
+                .replace(
+                    "__EID_TURN_NOTIFY_ENABLED__",
+                    "true" if eid_record_context_enabled() else "false",
+                )
             )
             return t(
                 handler,

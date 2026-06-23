@@ -10,6 +10,7 @@
 - Kanban board loads on Windows when `HERMES_HOME` / kanban data lives on a WSL UNC path (`\\wsl.localhost\...`). Windows `msvcrt` byte-range locks fail on those paths with `Resource deadlock avoided`; the WebUI bridge now skips the init lock there and returns a clear 503 if filesystem locking still fails.
 
 ### Changed
+- Embedded `/chatbot` iframes now post `hermes.chat.turn.completed` to the parent page after each assistant turn finishes (SSE `done`), with `effects.canvas_updated` / `refresh_targets` set to request an eid-web canvas refresh for every completed assistant turn. See `specs/012-eid-turn-complete-postmessage/README.md`.
 - Simplified EID embedding to a record-only mode. `HERMES_WEBUI_EID_RECORD_CONTEXT=1` now creates, restores, filters, and runs conversations by `record_id` without EID login, proxy identity headers, delegation tokens, or a remote authorization endpoint. Embedded API requests carry the active record automatically, and ship-lighting tools consume only the server-bound `HERMES_EID_RECORD_ID`.
 - Removed the old Session `eid_subject` / `eid_tenant` fields from runtime persistence and browser-facing session payloads; legacy files that still contain those keys are tolerated on load and cleaned up on subsequent saves.
 - Allowed Hermes WebUI to be embedded by the local development host app at `http://localhost:5174` using enforced CSP `frame-ancestors 'self' http://localhost:5174`, with `X-Frame-Options: ALLOW-FROM http://localhost:5174` as the legacy-browser fallback.
@@ -3245,7 +3246,7 @@ Closes #1792, #1795, #1796, #1800, #1806, #1807, #1694.
   - **+New-conversation button clipping**: introduces new `.has-tooltip--bottom-right` variant (`left:auto; right:0; transform:none`) for the `#btnNewChat` button which sits at the right edge of the sidebar header. Tooltip flips to align with the right edge of the trigger instead of extending past the viewport.
   - **Context-menu hover affordance**: adds visible `var(--hover-bg)` background on `.workspace-context-menu li:hover` (typo fix from `var(--hover)` which was undefined → no visual feedback).
   - **Rename pre-fill**: rename modal now calls `setSelectionRange(0, dot)` to pre-select the basename portion of a filename (everything before the last `.`), so users can immediately type the new name without manually clearing the extension.
-  
+
   `static/index.html +1` (single attribute swap on `#btnNewChat` from `has-tooltip--bottom` to `has-tooltip--bottom-right`), `static/sessions.js +4`, `static/style.css +26`, `static/ui.js +69`. 168 LOC of `tests/test_css_tooltips.py` extensions (regex-vs-source, consistent with existing pattern) + 263 LOC of new `tests/test_workspace_context_menu_and_rename.py`.
 
 ### Tests

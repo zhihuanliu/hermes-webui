@@ -39,7 +39,9 @@
     missingRecordId:!raw,
     recordRequired:true,
     locale:'zh',
-    botDisplayName:'助手'
+    botDisplayName:'助手',
+    parentPostMessageOrigin:__EMBED_ALLOWED_ORIGIN_JSON__,
+    turnNotifyEnabled:__EID_TURN_NOTIFY_ENABLED__
   };
   try{localStorage.setItem('hermes-lang','zh');}catch(_){}
 })()</script>
@@ -903,6 +905,7 @@
 <script src="static/terminal.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/sessions.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/commands.js?v=__WEBUI_VERSION__" defer></script>
+<script src="static/eid_embed.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/messages.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/panels.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/onboarding.js?v=__WEBUI_VERSION__" defer></script>

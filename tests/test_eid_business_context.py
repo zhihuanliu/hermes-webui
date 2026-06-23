@@ -84,7 +84,6 @@ def test_agent_thread_context_uses_only_dynamic_record_context():
 
 def test_ship_lighting_requires_record_but_not_identity(monkeypatch):
     dispatcher = _load_ship_lighting_module("tool_dispatcher")
-    api_client = _load_ship_lighting_module("api_client")
 
     monkeypatch.delenv("HERMES_EID_RECORD_ID", raising=False)
     missing = dispatcher._bind_trusted_eid_context("get_decks", {})
@@ -94,10 +93,8 @@ def test_ship_lighting_requires_record_but_not_identity(monkeypatch):
     params = {}
     assert dispatcher._bind_trusted_eid_context("get_decks", params) is None
     assert params["record_id"] == "record-a"
-    assert api_client._eid_headers() == {
-        "Accept": "application/json",
-        "X-EID-Record-Id": "record-a",
-    }
+    assert "user_id" not in params
+    assert "delegation_token" not in params
 
 
 def test_ship_lighting_rejects_model_supplied_record(monkeypatch):
