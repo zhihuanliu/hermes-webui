@@ -17,6 +17,7 @@ archive/
 .env.*
 !.env.example
 !.env.docker.example
+!.env.eid-webui.deploy.example
 .claude/
 CLAUDE.md
 AGENTS.local.md
@@ -58,6 +59,8 @@ docs/.windsurfrules
 graphify-out/
 .graphify_cached.json
 .graphify_uncached.txt
+dist/
+release/
 
 .venv/
 

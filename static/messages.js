@@ -2270,6 +2270,10 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
         playNotificationSound();
         sendBrowserNotification('Response complete',assistantText?assistantText.slice(0,100):'Task finished');
         if(typeof notifyEidParentTurnCompleted==='function'){
+          console.info('[Hermes EID bridge] assistant turn done; requesting parent canvas refresh',{
+            sessionId:completedSid,
+            recordId:String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.recordId||''),
+          });
           notifyEidParentTurnCompleted({
             recordId:String(window.__HERMES_CHATBOT_CONTEXT__&&window.__HERMES_CHATBOT_CONTEXT__.recordId||''),
             sessionId:completedSid,
@@ -2277,6 +2281,8 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
             completedAt:Date.now()/1000,
             canvasUpdated:true,
           });
+        }else{
+          console.warn('[Hermes EID bridge] assistant turn done but notifyEidParentTurnCompleted is unavailable');
         }
       };
       if(_shouldUseStreamFade()&&assistantBody){

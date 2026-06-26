@@ -3,6 +3,15 @@
 
 ## [Unreleased]
 
+### Added
+- Added EID-embedded Hermes WebUI Docker packaging and deployment helpers for
+  environments where Hermes Agent/Gateway and EID frontend are deployed
+  separately: `.env.eid-webui.deploy.example`,
+  `scripts/windows/package_eid_webui.ps1`, and
+  `scripts/linux/deploy_eid_webui.sh`. The Windows helper now creates a
+  Linux-ready `release/hermes-webui-eid/` directory containing the image tar,
+  compose file, `deploy.sh`, `deploy.env`, and `deploy.env.example`.
+
 ### Fixed
 - Gateway-backed browser turns now include the WebUI session's durable model-facing conversation history for both `runs` and `completions` transports, without duplicating the eagerly checkpointed current user message. Gateway `clarify.request` IDs are preserved and clarification answers are forwarded to the active remote run before WebUI clears its local card. The ship-lighting confirmation contract now explicitly rejects plain-text “允许/确认” prompts in place of an actual `clarify` tool call.
 - Embedded chatbot iframes now show a startup loading indicator instead of a blank chat pane while the saved conversation or record-scoped empty state is being resolved.

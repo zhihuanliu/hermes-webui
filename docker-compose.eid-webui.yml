@@ -1,61 +1,55 @@
-# EID record-only Hermes WebUI deployment (spec 009)
+# EID record-only Hermes WebUI deployment.
 #
-# QUICK START:
-#   cp .env.eid-webui.example .env
-#   # edit .env — set HERMES_WEBUI_GATEWAY_API_KEY (same as Agent API_SERVER_KEY)
-#   docker compose -f docker-compose.eid-webui.yml up -d --build
+# This compose file starts only Hermes WebUI. Hermes Agent/Gateway and EID
+# frontend are expected to be deployed separately and connected to eid-2-net.
 #
-# Verify:
-#   curl -i http://127.0.0.1:8787/health
-#   curl -i http://127.0.0.1:8787/api/health/agent
-#
-# EID embeds this WebUI at /assistant/chatbot?record_id=<id> via eid-web nginx
-# reverse proxy, or directly at http://<host>:8787/chatbot?record_id=<id>.
+# In the Windows-generated release/hermes-webui-eid package this file is copied
+# to docker-compose.yml and deploy.sh passes EID_WEBUI_ENV_FILE=deploy.env.
 
 services:
   hermes-webui:
-    image: hermes-webui-eid:latest
-    container_name: hermes-webui-eid
+    image: ${HERMES_WEBUI_IMAGE:-hermes-webui-eid:latest}
+    container_name: ${HERMES_WEBUI_CONTAINER_NAME:-hermes-webui-eid}
     ports:
-      - "8787:8787"
+      - "${HERMES_WEBUI_HOST_BIND:-127.0.0.1}:${HERMES_WEBUI_HOST_PORT:-8787}:8787"
     extra_hosts:
-      # Linux: reach Gateway on the Docker host via host.docker.internal
       - "host.docker.internal:host-gateway"
     volumes:
       - hermes-webui-home:/home/hermeswebui/.hermes
       - hermes-webui-venv:/app/venv
       - hermes-webui-uv-cache:/uv_cache
-      - ${HERMES_WORKSPACE:-./workspace}:/workspace
+      - ${HERMES_WORKSPACE:-/opt/eid-hermes/workspace}:/workspace
     env_file:
-      - .env.production
+      - ${EID_WEBUI_ENV_FILE:-deploy.env}
     environment:
+      - WANTED_UID=${HERMES_HOST_UID:-1000}
+      - WANTED_GID=${HERMES_HOST_GID:-1000}
       - HERMES_WEBUI_HOST=0.0.0.0
       - HERMES_WEBUI_PORT=8787
       - HERMES_WEBUI_STATE_DIR=/home/hermeswebui/.hermes/webui
+      - HERMES_WEBUI_DEFAULT_WORKSPACE=/workspace
 
-      # EID record-only integration (spec 008)
-      - HERMES_WEBUI_EID_RECORD_CONTEXT=1
-      - HERMES_WEBUI_EMBED_ALLOWED_ORIGIN=${HERMES_WEBUI_EMBED_ALLOWED_ORIGIN:-http://192.168.208.23:8080}
+      # EID record-only integration.
+      - HERMES_WEBUI_EID_RECORD_CONTEXT=${HERMES_WEBUI_EID_RECORD_CONTEXT:-1}
+      - HERMES_WEBUI_EMBED_ALLOWED_ORIGIN=${HERMES_WEBUI_EMBED_ALLOWED_ORIGIN:-http://localhost:8080}
 
-      # Remote Hermes Agent Gateway (spec 009)
-      - HERMES_WEBUI_CHAT_BACKEND=gateway
-      - HERMES_WEBUI_GATEWAY_BASE_URL=${HERMES_WEBUI_GATEWAY_BASE_URL:-http://192.168.208.23:8642}
+      # Existing Hermes Agent Gateway on eid-2-net.
+      - HERMES_WEBUI_CHAT_BACKEND=${HERMES_WEBUI_CHAT_BACKEND:-gateway}
+      - HERMES_WEBUI_GATEWAY_BASE_URL=${HERMES_WEBUI_GATEWAY_BASE_URL:-http://hermes-agent:8642}
       - HERMES_WEBUI_GATEWAY_API_KEY=${HERMES_WEBUI_GATEWAY_API_KEY}
+      - HERMES_WEBUI_GATEWAY_TRANSPORT=${HERMES_WEBUI_GATEWAY_TRANSPORT:-runs}
 
-      - HERMES_WEBUI_GATEWAY_TRANSPORT=runs
-      - HERMES_WORKSPACE=${HERMES_WORKSPACE:-./workspace}
-      # Record-only EID embedding relies on eid-web entry control; do not expose
-      # :8787 to the public internet without additional auth or reverse proxy.
-      - HERMES_WEBUI_PASSWORD=
-
-      # 或阿里云: https://mirrors.aliyun.com/pypi/simple/
-      - UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+      # Do not expose :8787 publicly without a password or trusted reverse proxy.
+      - HERMES_WEBUI_PASSWORD=${HERMES_WEBUI_PASSWORD:-}
+      - UV_INDEX_URL=${UV_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
     restart: unless-stopped
     networks:
       - eid-2-net
+
 networks:
   eid-2-net:
     external: true
+    name: ${EID_DOCKER_NETWORK:-eid-2-net}
 
 volumes:
   hermes-webui-home:

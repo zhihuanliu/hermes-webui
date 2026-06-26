@@ -58,10 +58,13 @@ def test_chatbot_includes_eid_turn_complete_postmessage_bridge():
     assert "function notifyEidParentTurnCompleted" in EID_EMBED_JS
     assert "hermes.chat.turn.completed" in EID_EMBED_JS
     assert "window.parent.postMessage" in EID_EMBED_JS
+    assert "Hermes EID bridge" in EID_EMBED_JS
+    assert "post turn-completed message to parent" in EID_EMBED_JS
     assert "canvas_updated" in EID_EMBED_JS
     assert "refresh_targets" in EID_EMBED_JS
 
     assert "notifyEidParentTurnCompleted" in MESSAGES_JS
+    assert "assistant turn done; requesting parent canvas refresh" in MESSAGES_JS
     assert "completedAt:Date.now()/1000" in MESSAGES_JS
     assert "canvasUpdated:true" in MESSAGES_JS
 

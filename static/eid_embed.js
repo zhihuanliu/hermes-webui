@@ -1,18 +1,45 @@
 // EID iframe parent notification bridge for /chatbot embed mode.
+function _eidTurnNotifyLog(level, message, details) {
+  const logger = (window.console && window.console[level]) || (window.console && window.console.log);
+  if (!logger) return;
+  logger.call(window.console, `[Hermes EID bridge] ${message}`, details || '');
+}
+
 function notifyEidParentTurnCompleted(payload) {
   const ctx = window.__HERMES_CHATBOT_CONTEXT__ || {};
-  if (!ctx.turnNotifyEnabled || !ctx.recordId) return;
+  if (!ctx.turnNotifyEnabled || !ctx.recordId) {
+    _eidTurnNotifyLog('warn', 'skip turn-completed postMessage: notification disabled or record missing', {
+      turnNotifyEnabled: !!ctx.turnNotifyEnabled,
+      hasRecordId: !!ctx.recordId,
+    });
+    return;
+  }
   const recordId = String((payload && payload.recordId) || '').trim();
-  if (!recordId || recordId !== String(ctx.recordId || '').trim()) return;
-  if (window.parent === window) return;
+  if (!recordId || recordId !== String(ctx.recordId || '').trim()) {
+    _eidTurnNotifyLog('warn', 'skip turn-completed postMessage: record mismatch', {
+      payloadRecordId: recordId,
+      contextRecordId: String(ctx.recordId || '').trim(),
+    });
+    return;
+  }
+  if (window.parent === window) {
+    _eidTurnNotifyLog('warn', 'skip turn-completed postMessage: not running inside iframe');
+    return;
+  }
   const targetOrigin = String(ctx.parentPostMessageOrigin || '').trim();
-  if (!targetOrigin) return;
+  if (!targetOrigin) {
+    _eidTurnNotifyLog('warn', 'skip turn-completed postMessage: parent target origin missing');
+    return;
+  }
   const sessionId = String((payload && payload.sessionId) || '').trim();
-  if (!sessionId) return;
+  if (!sessionId) {
+    _eidTurnNotifyLog('warn', 'skip turn-completed postMessage: session id missing');
+    return;
+  }
   const messageCount = Number(payload && payload.messageCount);
   const completedAt = Number(payload && payload.completedAt);
   const canvasUpdated = !!(payload && payload.canvasUpdated);
-  window.parent.postMessage({
+  const message = {
     type: 'hermes.chat.turn.completed',
     version: 1,
     record_id: recordId,
@@ -23,5 +50,13 @@ function notifyEidParentTurnCompleted(payload) {
       canvas_updated: canvasUpdated,
     },
     refresh_targets: canvasUpdated ? ['canvas'] : [],
-  }, targetOrigin);
+  };
+  _eidTurnNotifyLog('info', 'post turn-completed message to parent', {
+    targetOrigin,
+    recordId,
+    sessionId,
+    canvasUpdated,
+    refreshTargets: message.refresh_targets,
+  });
+  window.parent.postMessage(message, targetOrigin);
 }
