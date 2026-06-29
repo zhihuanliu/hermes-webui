@@ -313,6 +313,34 @@ def test_cheap_fingerprint_handles_missing_db(tmp_path):
     assert gw._cheap_change_fingerprint(missing) is None
 
 
+def test_cheap_fingerprint_marks_busy_state_db(tmp_path, monkeypatch):
+    gw = importlib.import_module("api.gateway_watcher")
+    db = tmp_path / "state.db"
+    db.write_bytes(b"not used")
+
+    def locked_connect(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(gw, "_connect_state_db", locked_connect)
+
+    assert gw._cheap_change_fingerprint(db) == gw._DB_BUSY_FINGERPRINT
+
+
+def test_gateway_projection_returns_none_when_state_db_busy(tmp_path, monkeypatch):
+    gw = importlib.import_module("api.gateway_watcher")
+    db = tmp_path / "state.db"
+    db.write_bytes(b"not used")
+
+    monkeypatch.setattr(gw, "_get_state_db_path", lambda: db)
+
+    def locked_rows(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(gw, "read_importable_agent_session_rows", locked_rows)
+
+    assert gw._get_agent_sessions_from_db() is None
+
+
 def test_cheap_fingerprint_handles_missing_optional_columns(tmp_path):
     """Older agent schemas without archived/ended_at must still produce a fingerprint."""
     gw = importlib.import_module("api.gateway_watcher")

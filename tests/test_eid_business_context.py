@@ -158,7 +158,12 @@ def test_session_resolve_creates_record_session_without_identity(monkeypatch):
         "record_id": "record-a",
         "profile": "default",
     })
-    monkeypatch.setattr(routes, "all_sessions", lambda: [])
+    captured_all_sessions_kwargs = {}
+    monkeypatch.setattr(
+        routes,
+        "all_sessions",
+        lambda **kwargs: captured_all_sessions_kwargs.update(kwargs) or [],
+    )
     monkeypatch.setattr(routes, "_session_model_state_from_request", lambda *_: ("model-a", "provider-a"))
     monkeypatch.setattr(routes, "publish_session_list_changed", lambda *_: None)
 
@@ -182,6 +187,7 @@ def test_session_resolve_creates_record_session_without_identity(monkeypatch):
     assert response["payload"]["created"] is True
     assert captured_kwargs["record_id"] == "record-a"
     assert captured_kwargs["context_type"] == "eid-record"
+    assert captured_all_sessions_kwargs == {"record_id": "record-a"}
 
 
 def test_session_resolve_accepts_record_id_from_query_when_body_omits_it(monkeypatch):
@@ -190,7 +196,12 @@ def test_session_resolve_accepts_record_id_from_query_when_body_omits_it(monkeyp
     monkeypatch.setenv("HERMES_WEBUI_EID_RECORD_CONTEXT", "1")
     monkeypatch.setattr(routes, "_check_csrf", lambda _handler: True)
     monkeypatch.setattr(routes, "read_body", lambda _handler: {"profile": "default"})
-    monkeypatch.setattr(routes, "all_sessions", lambda: [])
+    captured_all_sessions_kwargs = {}
+    monkeypatch.setattr(
+        routes,
+        "all_sessions",
+        lambda **kwargs: captured_all_sessions_kwargs.update(kwargs) or [],
+    )
     monkeypatch.setattr(routes, "_session_model_state_from_request", lambda *_: ("model-a", "provider-a"))
     monkeypatch.setattr(routes, "publish_session_list_changed", lambda *_: None)
 
@@ -212,6 +223,7 @@ def test_session_resolve_accepts_record_id_from_query_when_body_omits_it(monkeyp
     routes.handle_post(_handler(), urlparse("http://localhost/api/session/resolve?record_id=record-a"))
     assert response["status"] == 200
     assert captured_kwargs["record_id"] == "record-a"
+    assert captured_all_sessions_kwargs == {"record_id": "record-a"}
 
 
 def test_session_resolve_restores_latest_session_for_record(monkeypatch):
@@ -224,7 +236,15 @@ def test_session_resolve_restores_latest_session_for_record(monkeypatch):
     older = Session(session_id="older", record_id="record-a", updated_at=1)
     latest = Session(session_id="latest", record_id="record-a", updated_at=2)
     other = Session(session_id="other", record_id="record-b", updated_at=3)
-    monkeypatch.setattr(routes, "all_sessions", lambda: [older.compact(), other.compact(), latest.compact()])
+    captured_all_sessions_kwargs = {}
+    monkeypatch.setattr(
+        routes,
+        "all_sessions",
+        lambda **kwargs: (
+            captured_all_sessions_kwargs.update(kwargs)
+            or [older.compact(), other.compact(), latest.compact()]
+        ),
+    )
     monkeypatch.setattr(routes, "get_session", lambda sid, **_: {"older": older, "latest": latest, "other": other}[sid])
     monkeypatch.setattr(routes, "new_session", lambda **_: pytest.fail("must restore instead of creating"))
     response = {}
@@ -234,6 +254,7 @@ def test_session_resolve_restores_latest_session_for_record(monkeypatch):
     routes.handle_post(_handler(), urlparse("http://localhost/api/session/resolve?record_id=record-a"))
     assert response["payload"]["created"] is False
     assert response["payload"]["session"]["session_id"] == "latest"
+    assert captured_all_sessions_kwargs == {"record_id": "record-a"}
 
 
 def test_session_resolve_force_new_archives_record_candidates(monkeypatch):
@@ -248,7 +269,12 @@ def test_session_resolve_force_new_archives_record_candidates(monkeypatch):
 
     previous = Session(session_id="previous", record_id="record-a", updated_at=1)
     previous.save = lambda *_, **__: None
-    monkeypatch.setattr(routes, "all_sessions", lambda: [previous.compact()])
+    captured_all_sessions_kwargs = {}
+    monkeypatch.setattr(
+        routes,
+        "all_sessions",
+        lambda **kwargs: captured_all_sessions_kwargs.update(kwargs) or [previous.compact()],
+    )
     monkeypatch.setattr(routes, "get_session", lambda _sid, **_: previous)
     monkeypatch.setattr(routes, "_session_model_state_from_request", lambda *_: ("model-a", "provider-a"))
     monkeypatch.setattr(routes, "publish_session_list_changed", lambda *_: None)
@@ -264,3 +290,4 @@ def test_session_resolve_force_new_archives_record_candidates(monkeypatch):
     assert previous.archived is True
     assert response["payload"]["created"] is True
     assert response["payload"]["session"]["session_id"] == "created"
+    assert captured_all_sessions_kwargs == {"record_id": "record-a"}

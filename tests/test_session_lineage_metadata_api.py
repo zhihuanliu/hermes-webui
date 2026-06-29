@@ -58,12 +58,13 @@ def _insert_state_row(conn, sid, *, title=None, parent=None, ended_at=None, end_
     conn.commit()
 
 
-def _save_webui_session(sid, *, title, updated_at):
+def _save_webui_session(sid, *, title, updated_at, record_id=None):
     session = Session(
         session_id=sid,
         title=title,
         messages=[{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}],
         updated_at=updated_at,
+        record_id=record_id,
     )
     session.save(touch_updated_at=False)
     return session
@@ -98,6 +99,25 @@ def test_all_sessions_exposes_state_db_lineage_metadata_for_webui_json_sessions(
         assert "_lineage_root_id" not in rows["lineage_api_root"]
     finally:
         conn.close()
+
+
+def test_record_scoped_all_sessions_enriches_only_matching_record_rows(_isolate, monkeypatch):
+    captured = {}
+
+    def fake_lineage(_db_path, session_ids):
+        captured["session_ids"] = set(session_ids)
+        return {}
+
+    monkeypatch.setattr(models, "read_session_lineage_metadata", fake_lineage)
+
+    _save_webui_session("record_a_1", title="Record A", updated_at=1, record_id="record-a")
+    _save_webui_session("record_b_1", title="Record B", updated_at=2, record_id="record-b")
+    _save_webui_session("general_1", title="General", updated_at=3)
+
+    rows = all_sessions(record_id="record-a")
+
+    assert [row["session_id"] for row in rows] == ["record_a_1"]
+    assert captured["session_ids"] == {"record_a_1"}
 
 
 def test_all_sessions_keeps_explicit_forks_out_of_state_db_lineage_metadata(_isolate):

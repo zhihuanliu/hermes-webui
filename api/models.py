@@ -2828,7 +2828,14 @@ def _diag_stage(diag, name: str) -> None:
             pass
 
 
-def all_sessions(diag=None):
+def _filter_sidebar_rows_by_record_id(rows: list[dict], record_id: str | None) -> list[dict]:
+    if record_id is None:
+        return rows
+    expected = str(record_id)
+    return [row for row in rows if str(row.get('record_id') or '') == expected]
+
+
+def all_sessions(diag=None, record_id: str | None = None):
     _diag_stage(diag, "all_sessions.active_streams")
     active_stream_ids = _active_stream_ids()
     # Phase C: try index first for O(1) read; fall back to full scan
@@ -2891,6 +2898,13 @@ def all_sessions(diag=None):
                         include_runtime=True,
                         active_stream_ids=active_stream_ids,
                     )
+            if record_id is not None:
+                _diag_stage(diag, "all_sessions.record_filter")
+                index_map = {
+                    sid: row
+                    for sid, row in index_map.items()
+                    if str(row.get('record_id') or '') == str(record_id)
+                }
             _diag_stage(diag, "all_sessions.refresh_sidecar_metadata")
             refreshed_index_rows = _refresh_index_rows_from_sidecar_metadata(list(index_map.values()))
             index_map = {
@@ -2961,6 +2975,7 @@ def all_sessions(diag=None):
         and not getattr(s, 'worktree_path', None)
         and not getattr(s, 'record_id', None)
     )]
+    result = _filter_sidebar_rows_by_record_id(result, record_id)
     result = _prefer_fuller_snapshots_for_sidebar(result)
     sidebar_candidates = result
     visible_result = [s for s in sidebar_candidates if not _hide_from_default_sidebar(s)]

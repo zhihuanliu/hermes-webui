@@ -17,6 +17,7 @@ MESSAGING_SOURCES = {
 
 CLI_MIN_UNTITLED_MESSAGE_COUNT = 6
 CLI_MIN_UNTITLED_USER_MESSAGE_COUNT = 2
+SIDEBAR_STATE_DB_TIMEOUT_SECONDS = 0.1
 
 SOURCE_LABELS = {
     'api_server': 'API',
@@ -30,6 +31,32 @@ SOURCE_LABELS = {
     'webui': 'WebUI',
     'weixin': 'Weixin',
 }
+
+
+def _connect_state_db(db_path: Path, *, timeout: float | None = None, readonly: bool = False):
+    kwargs = {}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if readonly:
+        try:
+            return sqlite3.connect(
+                f"{Path(db_path).resolve().as_uri()}?mode=ro",
+                uri=True,
+                **kwargs,
+            )
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower():
+                raise
+        except (OSError, ValueError):
+            pass
+    return sqlite3.connect(str(db_path), **kwargs)
+
+
+def _sqlite_busy(exc: BaseException) -> bool:
+    if not isinstance(exc, sqlite3.Error):
+        return False
+    text = str(exc).lower()
+    return "database is locked" in text or "database table is locked" in text
 
 
 def normalize_agent_session_source(raw_source: str | None) -> dict:
@@ -345,6 +372,7 @@ def read_importable_agent_session_rows(
     limit: int = 200,
     log=None,
     exclude_sources: tuple[str, ...] | None = ("cron", "webui"),
+    connect_timeout: float | None = None,
 ) -> list[dict]:
     """Return agent sessions projected as importable conversations.
 
@@ -365,7 +393,7 @@ def read_importable_agent_session_rows(
         return []
 
     log = log or logger
-    with closing(sqlite3.connect(str(db_path))) as conn:
+    with closing(_connect_state_db(db_path, timeout=connect_timeout, readonly=True)) as conn:
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
@@ -663,7 +691,13 @@ def read_session_lineage_metadata(db_path: Path, session_ids: list[str] | set[st
         return {}
 
     try:
-        with closing(sqlite3.connect(str(db_path))) as conn:
+        with closing(
+            _connect_state_db(
+                db_path,
+                timeout=SIDEBAR_STATE_DB_TIMEOUT_SECONDS,
+                readonly=True,
+            )
+        ) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cur.execute("PRAGMA table_info(sessions)")
@@ -717,7 +751,9 @@ def read_session_lineage_metadata(db_path: Path, session_ids: list[str] | set[st
                     parent_id = rows.get(sid, {}).get('parent_session_id')
                     if parent_id and parent_id not in rows and parent_id not in to_fetch:
                         to_fetch.add(parent_id)
-    except Exception:
+    except Exception as exc:
+        if _sqlite_busy(exc):
+            logger.debug("state.db lineage metadata skipped because database is busy: %s", db_path)
         return {}
 
     metadata: dict[str, dict] = {}

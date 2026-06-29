@@ -20,7 +20,12 @@ from contextlib import closing
 from pathlib import Path
 
 from api.config import HOME
-from api.agent_sessions import read_importable_agent_session_rows
+from api.agent_sessions import (
+    SIDEBAR_STATE_DB_TIMEOUT_SECONDS,
+    _connect_state_db,
+    _sqlite_busy,
+    read_importable_agent_session_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,7 @@ def _snapshot_hash(sessions: list) -> str:
 # cheap change-detection scan below sees exactly the same row set as the
 # expensive projection (otherwise cron message churn would defeat the gate).
 _WATCHER_EXCLUDED_SOURCES = ("cron", "webui")
+_DB_BUSY_FINGERPRINT = "__state_db_busy__"
 
 
 def _cheap_change_fingerprint(db_path: Path) -> str | None:
@@ -87,7 +93,13 @@ def _cheap_change_fingerprint(db_path: Path) -> str | None:
         'origin_chat_id', 'origin_user_id', 'platform',
     )
     try:
-        with closing(sqlite3.connect(str(db_path))) as conn:
+        with closing(
+            _connect_state_db(
+                db_path,
+                timeout=SIDEBAR_STATE_DB_TIMEOUT_SECONDS,
+                readonly=True,
+            )
+        ) as conn:
             cur = conn.cursor()
             cur.execute("PRAGMA table_info(sessions)")
             cols = {row[1] for row in cur.fetchall()}
@@ -139,7 +151,9 @@ def _cheap_change_fingerprint(db_path: Path) -> str | None:
                     # signal the caller to run the full projection.
                     return None
             return h.hexdigest()
-    except Exception:
+    except Exception as exc:
+        if _sqlite_busy(exc):
+            return _DB_BUSY_FINGERPRINT
         return None
 
 
@@ -155,9 +169,10 @@ def _get_state_db_path() -> Path:
     return hermes_home / 'state.db'
 
 
-def _get_agent_sessions_from_db() -> list:
+def _get_agent_sessions_from_db() -> list | None:
     """Read all non-webui sessions from state.db.
-    Returns list of session dicts, or empty list on any error.
+    Returns list of session dicts, empty list on ordinary errors, or None when
+    state.db is temporarily busy and the previous watcher snapshot should stay.
     """
     db_path = _get_state_db_path()
     if not db_path.exists():
@@ -165,7 +180,12 @@ def _get_agent_sessions_from_db() -> list:
 
     try:
         sessions = []
-        for row in read_importable_agent_session_rows(db_path, limit=200, log=logger):
+        for row in read_importable_agent_session_rows(
+            db_path,
+            limit=200,
+            log=logger,
+            connect_timeout=SIDEBAR_STATE_DB_TIMEOUT_SECONDS,
+        ):
             sessions.append({
                 'session_id': row['id'],
                 'title': row['title'] or 'Agent Session',
@@ -179,7 +199,10 @@ def _get_agent_sessions_from_db() -> list:
                 'source_label': row.get('source_label'),
             })
         return sessions
-    except Exception:
+    except Exception as exc:
+        if _sqlite_busy(exc):
+            logger.debug("gateway watcher skipped state.db projection because database is busy")
+            return None
         return []
 
 
@@ -305,21 +328,24 @@ class GatewayWatcher:
                 # never silently skip a real change.
                 db_path = _get_state_db_path()
                 cheap_fp = _cheap_change_fingerprint(db_path) if db_path.exists() else ''
-                if cheap_fp is not None and cheap_fp == self._last_cheap_fp:
+                if cheap_fp == _DB_BUSY_FINGERPRINT:
+                    logger.debug("gateway watcher skipped poll because state.db is busy")
+                elif cheap_fp is not None and cheap_fp == self._last_cheap_fp:
                     # Nothing changed in the sidebar-visible session set; skip
                     # the expensive projection and the notify entirely.
                     pass
                 else:
                     # Phase 2: only now pay for the full projection.
                     sessions = _get_agent_sessions_from_db()
-                    current_hash = _snapshot_hash(sessions)
-                    if cheap_fp is not None:
-                        self._last_cheap_fp = cheap_fp
+                    if sessions is not None:
+                        current_hash = _snapshot_hash(sessions)
+                        if cheap_fp is not None:
+                            self._last_cheap_fp = cheap_fp
 
-                    if current_hash != self._last_hash:
-                        self._last_hash = current_hash
-                        self._last_sessions = sessions
-                        self._notify_subscribers(sessions)
+                        if current_hash != self._last_hash:
+                            self._last_hash = current_hash
+                            self._last_sessions = sessions
+                            self._notify_subscribers(sessions)
             except Exception:
                 logger.debug("Error in gateway watcher poll loop", exc_info=True)
 

@@ -74,12 +74,13 @@ def _eid_session_access_allowed(handler, session, requested_record=None) -> bool
     return True
 
 
-def _eid_filter_session_rows(handler, rows, parsed):
+def _eid_filter_session_rows(handler, rows, parsed, requested_record=None):
     if not eid_record_context_enabled():
         return rows, None
-    requested_record, error_sent = _eid_request_record_id(handler, parsed, required=True)
-    if error_sent:
-        return None, True
+    if requested_record is None:
+        requested_record, error_sent = _eid_request_record_id(handler, parsed, required=True)
+        if error_sent:
+            return None, True
     scoped = [row for row in rows if session_matches_record(row, requested_record)]
     return scoped, False
 
@@ -5501,12 +5502,18 @@ def handle_get(handler, parsed) -> bool:
     if parsed.path == "/api/sessions":
         diag = RequestDiagnostics.maybe_start("GET", parsed.path, logger=logger)
         try:
+            requested_record = None
+            if eid_record_context_enabled():
+                diag.stage("eid_record")
+                requested_record, error_sent = _eid_request_record_id(handler, parsed, required=True)
+                if error_sent:
+                    return True
             diag.stage("all_sessions")
-            webui_sessions = all_sessions(diag=diag)
+            webui_sessions = all_sessions(diag=diag, record_id=requested_record)
             diag.stage("reconcile_stale_stream_state")
             if _reconcile_stale_stream_state_for_session_rows(webui_sessions):
                 diag.stage("all_sessions_after_stale_stream_reconcile")
-                webui_sessions = all_sessions(diag=diag)
+                webui_sessions = all_sessions(diag=diag, record_id=requested_record)
             diag.stage("load_settings")
             settings = load_settings()
             show_cli_sessions = bool(settings.get("show_cli_sessions"))
@@ -5578,7 +5585,12 @@ def handle_get(handler, parsed) -> bool:
                 reverse=True,
             )
             diag.stage("eid_filter")
-            merged, eid_error_sent = _eid_filter_session_rows(handler, merged, parsed)
+            merged, eid_error_sent = _eid_filter_session_rows(
+                handler,
+                merged,
+                parsed,
+                requested_record=requested_record,
+            )
             if eid_error_sent:
                 return True
             # ── Profile scoping (#1611) ────────────────────────────────────────
@@ -6415,7 +6427,7 @@ def handle_post(handler, parsed) -> bool:
 
         requested_profile = body.get("profile") or None
         candidates = [
-            row for row in all_sessions()
+            row for row in all_sessions(record_id=record_id)
             if session_matches_record(row, record_id)
             and _profiles_match(row.get("profile"), requested_profile or row.get("profile"))
             and not row.get("archived")
@@ -8557,7 +8569,17 @@ def _handle_sessions_search(handler, parsed):
         depth = max(0, int(qs.get("depth", ["5"])[0]))
     except (ValueError, TypeError):
         depth = 5
-    session_rows, eid_error_sent = _eid_filter_session_rows(handler, all_sessions(), parsed)
+    requested_record = None
+    if eid_record_context_enabled():
+        requested_record, error_sent = _eid_request_record_id(handler, parsed, required=True)
+        if error_sent:
+            return True
+    session_rows, eid_error_sent = _eid_filter_session_rows(
+        handler,
+        all_sessions(record_id=requested_record),
+        parsed,
+        requested_record=requested_record,
+    )
     if eid_error_sent:
         return True
     if not q:

@@ -132,6 +132,24 @@ def test_orphan_parent_reference_not_exposed_in_metadata(tmp_path):
     )
 
 
+def test_lineage_metadata_skips_busy_state_db_without_waiting(tmp_path, monkeypatch):
+    from api import agent_sessions
+
+    db = tmp_path / "state.db"
+    db.write_bytes(b"not used")
+
+    def locked_connect(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(agent_sessions.sqlite3, "connect", locked_connect)
+
+    started = time.monotonic()
+    result = agent_sessions.read_session_lineage_metadata(db, ["child"])
+
+    assert result == {}
+    assert time.monotonic() - started < 0.5
+
+
 def test_cycle_in_parent_chain_terminates(tmp_path):
     """Pathological data with a parent cycle (A→B→A) must not infinite-loop."""
     from api.agent_sessions import read_session_lineage_metadata

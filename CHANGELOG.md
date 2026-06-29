@@ -13,6 +13,13 @@
   compose file, `deploy.sh`, `deploy.env`, and `deploy.env.example`.
 
 ### Fixed
+- Record-scoped embedded session list and resolve requests now filter WebUI
+  sessions by `record_id` before enriching sidebar compression-lineage metadata,
+  avoiding full-sidebar `state.db` reads for a single embedded record. Sidebar
+  lineage metadata and the Gateway session watcher also degrade quickly when the
+  shared SQLite `state.db` is temporarily busy, preserving the base session list
+  and previous watcher snapshot instead of waiting on the default SQLite lock
+  timeout.
 - Gateway-backed browser turns now include the WebUI session's durable model-facing conversation history for both `runs` and `completions` transports, without duplicating the eagerly checkpointed current user message. Gateway `clarify.request` IDs are preserved and clarification answers are forwarded to the active remote run before WebUI clears its local card. The ship-lighting confirmation contract now explicitly rejects plain-text “允许/确认” prompts in place of an actual `clarify` tool call.
 - Embedded chatbot iframes now show a startup loading indicator instead of a blank chat pane while the saved conversation or record-scoped empty state is being resolved.
 - Gateway-backed browser chat now bridges Hermes run SSE `approval.request` events into WebUI's existing approval card, `/api/approval/pending`, and `/api/approval/stream`, and forwards `/api/approval/respond` to `POST /v1/runs/{run_id}/approval` on the remote Gateway so embedded EID iframe chat can unblock `execute_code` and other gated tools.
